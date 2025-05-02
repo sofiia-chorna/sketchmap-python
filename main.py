@@ -52,7 +52,11 @@ def analyse(
     max_distance = max_distance if max_distance is not None else np.max(distances)
     bins = np.linspace(0, max_distance, n_bin + 1)
     hist = Histogram(bins)
-    hist.add_values(bins)
+    hist.add_values(distances, dweights)
+
+    logger.info(f"Start calculating outliers")
+    out_above, out_below = hist.get_outliers()
+    logger.info(f"Fraction outside: {out_above:.6f} {out_below:.6f}")
 
     logger.info("End running 'analyze'")
 
