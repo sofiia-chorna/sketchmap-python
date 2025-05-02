@@ -15,6 +15,7 @@ def output_filepath(func):
     return click.option(
         "--output_filepath",
         help="Path to the result file",
+        default="analyse_result.csv",
         type=str,
     )(func)
 

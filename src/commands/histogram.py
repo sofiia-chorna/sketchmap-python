@@ -29,3 +29,13 @@ class Histogram:
 
     def get_outliers(self):
         return self.above / self.ndata, self.below / self.ndata
+
+    def get_results(self):
+        first_bin = self.boundaries[1:]
+        last_bin = self.boundaries[:-1]
+
+        prob_density_func = self.bins / self.ndata if self.ndata > 0 else self.bins
+        centers = 0.5 * (last_bin + first_bin)
+        widths = first_bin - last_bin
+
+        return centers, prob_density_func, widths

@@ -1,10 +1,11 @@
+import csv
+import os
 from typing import Optional
 
 import click
 import numpy as np
 
 from src.commands.analyze import compute_distances
-
 from src.commands.histogram import Histogram
 from src.utils.cli import (
     dimension,
@@ -16,6 +17,7 @@ from src.utils.cli import (
 )
 from src.utils.file import read_file
 from src.utils.logger import logger
+from src.utils.plot import get_analyze_plot
 
 
 @click.group()
@@ -35,7 +37,7 @@ def analyse(
     max_distance: int,
     n_bin: int,
     dimension: Optional[int] = None,
-    output_filepath: Optional[str] = "analyse_result.json",
+    output_filepath: str = "analyse_result.csv",
     weighted: bool = False,
 ):
     logger.info("Start running 'analyze'")
@@ -57,6 +59,20 @@ def analyse(
     logger.info(f"Start calculating outliers")
     out_above, out_below = hist.get_outliers()
     logger.info(f"Fraction outside: {out_above:.6f} {out_below:.6f}")
+
+    logger.info(f"Writing results to {output_filepath}")
+    centers, prob_density_func, widths = hist.get_results()
+
+    with open(output_filepath, "w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["center", "pdf", "width"])
+        for center, pdf_val, width in zip(centers, prob_density_func, widths):
+            writer.writerow([f"{center:.6e}", f"{pdf_val:.6e}", f"{width:.6e}"])
+
+    os.makedirs("results", exist_ok=True)
+    histo_plot_path = os.path.join("results")
+    logger.info(f"Start saving histogram to {histo_plot_path}")
+    get_analyze_plot(output_filepath, histo_plot_path)
 
     logger.info("End running 'analyze'")
 
