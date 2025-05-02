@@ -1,7 +1,7 @@
 import numpy as np
 import argparse
 from scipy.spatial.distance import pdist
-from itertools import combinations
+import torch
 
 
 class Histogram:
@@ -10,17 +10,27 @@ class Histogram:
         self.bins = np.zeros(len(bins) - 1)
         self.below = 0.0
         self.above = 0.0
-        self.ndata = 0.0  # Total weight of all added samples
+        self.ndata = 0.0
 
-    def add(self, value, weight=1.0):
-        if value < self.boundaries[0]:
-            self.below += weight
-        elif value >= self.boundaries[-1]:
-            self.above += weight
-        else:
-            idx = np.searchsorted(self.boundaries, value, side='right') - 1
-            self.bins[idx] += weight
-        self.ndata += weight
+    def add_values(self, values, weights):
+        # Convert to numpy if they're torch tensors
+        if torch.is_tensor(values):
+            values = values.cpu().numpy()
+        if torch.is_tensor(weights):
+            weights = weights.cpu().numpy()
+
+        # Vectorized binning
+        valid_mask = (values >= self.boundaries[0]) & (values < self.boundaries[-1])
+        self.below += np.sum(weights[values < self.boundaries[0]])
+        self.above += np.sum(weights[values >= self.boundaries[-1]])
+
+        if np.any(valid_mask):
+            valid_values = values[valid_mask]
+            valid_weights = weights[valid_mask]
+            indices = np.searchsorted(self.boundaries, valid_values, side="right") - 1
+            np.add.at(self.bins, indices, valid_weights)
+
+        self.ndata += np.sum(weights)
 
     def get_results(self):
         pdf = self.bins / self.ndata if self.ndata > 0 else self.bins
@@ -32,47 +42,109 @@ class Histogram:
         return self.above / self.ndata, self.below / self.ndata
 
 
-def read_matrix(filename, dim, weighted=False):
-    data, weights = [], []
-    with open(filename) as f:
-        for line in f:
-            parts = list(map(float, line.strip().split()))
-            if len(parts) >= dim:
-                data.append(parts[:dim])
-                weights.append(parts[dim] if weighted and len(parts) > dim else 1.0)
-    return np.array(data), np.array(weights)
+def read_data(filename, dim, weighted=False, device="cpu"):
+    """Read data supporting both .pt files and text files"""
+    if filename.endswith(".pt"):
+        # Handle PyTorch .pt file
+        data = torch.load(filename, map_location=device)
+        if isinstance(data, (tuple, list)):
+            points = data[0]
+            weights = data[1] if len(data) > 1 else torch.ones(len(points))
+        else:
+            points = data
+            weights = torch.ones(len(points))
+
+        # Ensure correct dimensionality
+        if points.shape[1] > dim:
+            points = points[:, :dim]
+        elif points.shape[1] < dim:
+            raise ValueError(
+                f"Data has {points.shape[1]} dimensions, but requested {dim}"
+            )
+
+        return points, weights
+    else:
+        # Handle text file
+        data = np.loadtxt(filename)
+        points = data[:, :dim]
+        weights = (
+            data[:, dim] if weighted and data.shape[1] > dim else np.ones(len(points))
+        )
+
+        if torch.cuda.is_available() and device != "cpu":
+            return torch.tensor(points, device=device), torch.tensor(
+                weights, device=device
+            )
+
+        return points, weights
+
+
+def compute_distances(points, weights, weighted=False, device="cpu"):
+    """Compute distances using either numpy or torch depending on input type"""
+    if torch.is_tensor(points):
+        # Torch implementation
+        if device != "cpu" and torch.cuda.is_available():
+            points = points.to(device)
+            weights = (
+                weights.to(device)
+                if weighted
+                else torch.ones(len(points), device=device)
+            )
+
+        # Compute pairwise distances
+        dist_matrix = torch.cdist(points, points)
+
+        # Get upper triangular part
+        rows, cols = torch.triu_indices(len(points), len(points), offset=1)
+        distances = dist_matrix[rows, cols]
+
+        if weighted:
+            dweights = torch.outer(weights, weights)[rows, cols]
+        else:
+            dweights = torch.ones_like(distances)
+
+        return distances.cpu().numpy(), dweights.cpu().numpy()
+    else:
+        # Numpy implementation
+        distances = pdist(points, "euclidean")
+        if weighted:
+            dweights = np.outer(weights, weights)[np.triu_indices(len(weights), k=1)]
+        else:
+            dweights = np.ones_like(distances)
+        return distances, dweights
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-P", "--highdim", required=True, help="Input high-dimensional file")
+    parser.add_argument(
+        "-P",
+        "--highdim",
+        required=True,
+        help="Input high-dimensional file (.pt or text)",
+    )
     parser.add_argument("-d", "--dim", type=int, required=True, help="Dimensionality")
     parser.add_argument("-nbin", type=int, default=100, help="Number of bins")
     parser.add_argument("-maxd", type=float, help="Max distance")
     parser.add_argument("-w", "--weighted", action="store_true", help="Use weights")
     args = parser.parse_args()
 
-    points, weights = read_matrix(args.highdim, args.dim, args.weighted)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    distances = pdist(points, 'euclidean')
+    points, weights = read_data(args.highdim, args.dim, args.weighted, device)
 
-    if args.weighted:
-        dweights = np.outer(weights, weights)
-        dweights = dweights[np.triu_indices(len(weights), k=1)]
-    else:
-        dweights = np.ones_like(distances)
+    distances, dweights = compute_distances(points, weights, args.weighted, device)
 
-    distances = np.array(distances)
-    dweights = np.array(dweights)
-    maxd = args.maxd if args.maxd is not None else distances.max()
+    # Setup histogram
+    maxd = args.maxd if args.maxd is not None else np.max(distances)
     bins = np.linspace(0, maxd, args.nbin + 1)
     hist = Histogram(bins)
 
-    for d, w in zip(distances, dweights):
-        hist.add(d, w)
+    # Process all distances at once
+    hist.add_values(distances, dweights)
 
+    # Output results
     out_above, out_below = hist.get_outliers()
-    print(f"# Fraction outside: {out_above:.0f} - {out_below:.0f}")
+    print(f"# Fraction outside: {out_above:.6f} {out_below:.6f}")
 
     centers, pdf, widths = hist.get_results()
     for c, p, w in zip(centers, pdf, widths):
