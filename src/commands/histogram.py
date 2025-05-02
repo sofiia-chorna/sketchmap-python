@@ -11,11 +11,10 @@ class Histogram:
         self.ndata = 0.0
 
     def add_values(
-        self, values: tuple[torch.Tensor], weights: tuple[torch.Tensor, torch.Tensor]
+        self,
+        values: tuple[np.ndarray, np.ndarray],
+        weights: tuple[np.ndarray, np.ndarray],
     ):
-        values = values.cpu().numpy()
-        weights = weights.cpu().numpy()
-
         valid_mask = (values >= self.boundaries[0]) & (values < self.boundaries[-1])
         self.below += np.sum(weights[values < self.boundaries[0]])
         self.above += np.sum(weights[values >= self.boundaries[-1]])
@@ -27,3 +26,6 @@ class Histogram:
             np.add.at(self.bins, indices, valid_weights)
 
         self.ndata += np.sum(weights)
+
+    def get_outliers(self):
+        return self.above / self.ndata, self.below / self.ndata
