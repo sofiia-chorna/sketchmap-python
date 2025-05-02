@@ -54,13 +54,16 @@ def read_data(filename, dim, weighted=False, device="cpu"):
             points = data
             weights = torch.ones(len(points))
 
-        # Ensure correct dimensionality
-        if points.shape[1] > dim:
-            points = points[:, :dim]
+        if not dim:
+            dim = points.shape[1]
         elif points.shape[1] < dim:
             raise ValueError(
                 f"Data has {points.shape[1]} dimensions, but requested {dim}"
             )
+        else:
+            print("Data dim: {points.shape[1]}, requested dim: {dim}")
+
+        points = points[:, :dim]
 
         return points, weights
     else:
@@ -122,7 +125,7 @@ def main():
         required=True,
         help="Input high-dimensional file (.pt or text)",
     )
-    parser.add_argument("-d", "--dim", type=int, required=True, help="Dimensionality")
+    parser.add_argument("-d", "--dim", type=int, help="Dimensionality")
     parser.add_argument("-nbin", type=int, default=100, help="Number of bins")
     parser.add_argument("-maxd", type=float, help="Max distance")
     parser.add_argument("-w", "--weighted", action="store_true", help="Use weights")
