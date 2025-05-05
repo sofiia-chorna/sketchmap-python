@@ -18,7 +18,7 @@ class DistanceCalculator:
         self.period = period
         self.sphere_period = sphere_period
 
-    def _single_distance(self, x: np.ndarray, y: np.ndarray) -> float:
+    def single_distance(self, x: np.ndarray, y: np.ndarray) -> float:
         match self.metric:
             case "euclidean":
                 return np.linalg.norm(x - y)
@@ -73,7 +73,7 @@ class DistanceCalculator:
                 idx = 0
                 for i in range(n):
                     for j in range(i + 1, n):
-                        distances[idx] = self._single_distance(points[i], points[j])
+                        distances[idx] = self.single_distance(points[i], points[j])
                         idx += 1
 
             if weighted and weights is not None:
