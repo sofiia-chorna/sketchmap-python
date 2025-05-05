@@ -38,7 +38,7 @@ def compute_distances(
         dist_matrix = torch.cdist(points, points)
 
         # here we get upper trianglular part of the matrix to exlude duplications and self-distances
-        rows, cols = torch.triu_indices(len(points), len(points))
+        rows, cols = torch.triu_indices(len(points), len(points), offset=1)
         distances = dist_matrix[rows, cols]
 
         if weighted:
