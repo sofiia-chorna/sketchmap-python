@@ -15,7 +15,6 @@ def output_filepath(func):
     return click.option(
         "--output_filepath",
         help="Path to the result file",
-        default="analyse_result.csv",
         type=str,
     )(func)
 
@@ -55,4 +54,24 @@ def dimension(func):
         "--d",
         help="Dimention to consider for the input data",
         type=int,
+    )(func)
+
+
+def num(func):
+    return click.option(
+        "--num",
+        "--n",
+        default=1000,
+        help="Number of data to select",
+        type=int,
+    )(func)
+
+
+def select_mode(func):
+    return click.option(
+        "--select_mode",
+        "--mode",
+        help="Number of data to select",
+        type=click.Choice(["minmax", "random"], case_sensitive=False),
+        default="minmax",
     )(func)
