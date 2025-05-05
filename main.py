@@ -102,6 +102,7 @@ def select_landmarks(
     weighted: bool = False,
 ):
     logger.info("Start running 'select-landmarks'")
+    logger.info(f"Params: num={num}, select_mode={select_mode}, weighted={weighted}")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
     points, weights = read_file(hdim_filepath, dimension, weighted)
@@ -112,13 +113,15 @@ def select_landmarks(
         points, weights, weighted, num, select_mode
     )
 
-    logger.info(f"Saving landmarks to {output_filepath}")
-    np.savetxt(output_filepath, highlandmarks.cpu().numpy())
-
     if weighted:
-        weight_filepath = output_filepath.replace(".dat", "_weights.dat")
-        logger.info(f"Saving landmark weights to {weight_filepath}")
-        np.savetxt(weight_filepath, landmark_weights.cpu().numpy())
+        combined = np.hstack((highlandmarks, landmark_weights.reshape(-1, 1)))
+    else:
+        combined = np.hstack(
+            (highlandmarks, np.ones(len(highlandmarks)).reshape(-1, 1))
+        )
+
+    logger.info(f"Saving landmarks to {output_filepath}")
+    np.savetxt(output_filepath, combined)
 
     logger.info("Finished landmark selection")
 
