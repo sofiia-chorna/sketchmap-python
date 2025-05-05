@@ -49,11 +49,20 @@ def weighted(func):
     )(func)
 
 
-def dimension(func):
+def high_dimension(func):
     return click.option(
-        "--dimension",
-        "--d",
-        help="Dimention to consider for the input data",
+        "--high_dimension",
+        "--highd",
+        help="Dimention to consider for the input highdim data",
+        type=int,
+    )(func)
+
+
+def low_dimension(func):
+    return click.option(
+        "--low_dimension",
+        "--lowd",
+        help="Dimention to consider for the lowdim data",
         type=int,
     )(func)
 

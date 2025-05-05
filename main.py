@@ -5,12 +5,14 @@ from typing import Optional
 import click
 import numpy as np
 
+from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
 from src.commands.histogram import Histogram
 from src.commands.landmarks import run_get_landmarks
 from src.utils.cli import (
-    dimension,
     hdim_filepath,
+    high_dimension,
+    low_dimension,
     max_distance,
     n_bin,
     num,
@@ -32,21 +34,21 @@ def main():
 @hdim_filepath
 @max_distance
 @n_bin
-@dimension
+@high_dimension
 @output_filepath
 @weighted
 def analyse(
     hdim_filepath: str,
     max_distance: int,
     n_bin: int,
-    dimension: Optional[int] = None,
+    high_dimension: Optional[int] = None,
     output_filepath: str = "analyse_result.csv",
     weighted: bool = False,
 ):
     logger.info("Start running 'analyze'")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
-    points, weights = read_file(hdim_filepath, dimension, weighted)
+    points, weights = read_file(hdim_filepath, high_dimension, weighted)
     logger.info(f"Read {len(points)} points")
 
     logger.info(f"Start computing distances")
@@ -90,14 +92,14 @@ def analyse(
 @hdim_filepath
 @num
 @select_mode
-@dimension
+@high_dimension
 @output_filepath
 @weighted
 def select_landmarks(
     hdim_filepath: str,
-    num: int = 100,
+    num: int = 1000,
     select_mode: str = "minmax",
-    dimension: Optional[int] = None,
+    high_dimension: Optional[int] = None,
     output_filepath: str = "high_landmarks.dat",
     weighted: bool = False,
 ):
@@ -105,7 +107,7 @@ def select_landmarks(
     logger.info(f"Params: num={num}, select_mode={select_mode}, weighted={weighted}")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
-    points, weights = read_file(hdim_filepath, dimension, weighted)
+    points, weights = read_file(hdim_filepath, high_dimension, weighted)
     logger.info(f"Read {len(points)} points")
 
     logger.info(f"Start selecting high-landmarks")
@@ -127,8 +129,152 @@ def select_landmarks(
 
 
 @main.command()
-def fit_landmarks():
-    pass
+@click.option(
+    "--highlandmarks_filepath",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to file with selected high landmarks",
+)
+@click.option(
+    "--high-dimension",
+    "-D",
+    type=int,
+    required=True,
+    help="Dimensionality of input space",
+)
+@click.option(
+    "--low-dimension", "-d", type=int, default=2, help="Dimensionality of output space"
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_filepath",
+    default="low_landmarks.dat",
+    help="Output file path",
+)
+@click.option(
+    "--period",
+    "-pi",
+    type=float,
+    default=0.0,
+    help="Periodicity for PBC (0 for non-periodic)",
+)
+@click.option(
+    "--metric",
+    type=click.Choice(["euclidean", "dot", "pbc"]),
+    default="euclidean",
+    help="Distance metric",
+)
+@click.option(
+    "--weighted/--no-weighted", default=False, help="Use weights from input file"
+)
+@click.option("--sigma-hd", type=float, default=6.0, help="High-dim sigma parameter")
+@click.option("--a-hd", type=float, default=2.0, help="High-dim a parameter")
+@click.option("--b-hd", type=float, default=6.0, help="High-dim b parameter")
+@click.option("--sigma-ld", type=float, default=6.0, help="Low-dim sigma parameter")
+@click.option("--a-ld", type=float, default=2.0, help="Low-dim a parameter")
+@click.option("--b-ld", type=float, default=6.0, help="Low-dim b parameter")
+@click.option(
+    "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
+)
+@click.option(
+    "--gopt-steps", type=int, default=0, help="Number of global optimization steps"
+)
+@click.option(
+    "--imix", type=float, default=0.0, help="Mixing parameter for stress function"
+)
+@click.option("--grid-width", type=float, help="Grid width for global optimization")
+@click.option("--coarse-pts", type=int, help="Number of coarse grid points")
+@click.option("--fine-pts", type=int, help="Number of fine grid points")
+@click.option("--center/--no-center", default=True, help="Center the points")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+def dimred(
+    highlandmarks_filepath: str,
+    high_dimension: int,
+    low_dimension: int = 2,
+    output_filepath: str = "low_landmarks.dat",
+    period: float = 0.0,
+    metric: str = "euclidean",
+    weighted: bool = False,
+    sigma_hd: float = 6.0,
+    a_hd: float = 2.0,
+    b_hd: float = 6.0,
+    sigma_ld: float = 6.0,
+    a_ld: float = 2.0,
+    b_ld: float = 6.0,
+    preopt_steps: int = 100,
+    gopt_steps: int = 0,
+    imix: float = 0.0,
+    grid_width: Optional[float] = None,
+    coarse_pts: Optional[int] = None,
+    fine_pts: Optional[int] = None,
+    center: bool = True,
+    verbose: bool = False,
+):
+    try:
+        data = np.loadtxt(highlandmarks_filepath)
+
+        if np.any(np.isinf(data)) or np.any(np.isnan(data)):
+            logger.warning("Input contains inf/NaN values - cleaning data")
+            data = np.nan_to_num(data)
+
+        if weighted:
+            points = data[:, :-1]
+            weights = data[:, -1]
+        else:
+            points = data
+            weights = None
+
+        if points.shape[1] != high_dimension:
+            raise ValueError(
+                f"Expected {high_dimension} dimensions, got {points.shape[1]}"
+            )
+    except Exception as e:
+        logger.error(f"Error reading input file: {e}")
+        raise click.Abort()
+
+    # set up grid parameters if provided => for now not available
+    grid_params = None
+    if all(p is not None for p in [grid_width, coarse_pts, fine_pts]):
+        grid_params = (grid_width, coarse_pts, fine_pts)
+
+    reducer = DimRed(
+        high_dim=high_dimension,
+        low_dim=low_dimension,
+        metric=metric,
+        period=period,
+        center=center,
+        verbose=verbose,
+    )
+
+    reducer.set_transformation("high", "sigmoid", (sigma_hd, a_hd, b_hd))
+    reducer.set_transformation("low", "sigmoid", (sigma_ld, a_ld, b_ld))
+
+    try:
+        logger.info("Starting dimensionality reduction")
+        low_dim_points = reducer.fit(
+            X=points,
+            weights=weights,
+            preopt_steps=preopt_steps,
+            gopt_steps=gopt_steps,
+            imix=imix,
+            grid_params=grid_params,
+        )
+
+        if weighted:
+            combined = np.hstack((low_dim_points, weights.reshape(-1, 1)))
+        else:
+            combined = np.hstack(
+                (low_dim_points, np.ones(len(low_dim_points)).reshape(-1, 1))
+            )
+
+        logger.info(f"Saving results to {output_filepath}")
+        np.savetxt(output_filepath, combined)
+        logger.info("Dimensionality reduction completed successfully")
+
+    except Exception as e:
+        logger.error(f"Error during dimensionality reduction: {e}")
+        raise click.Abort()
 
 
 @main.command()
