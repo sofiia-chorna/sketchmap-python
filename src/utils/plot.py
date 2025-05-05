@@ -14,7 +14,7 @@ def get_analyze_plot(results_filepath: str, savepath: str = "plot.png"):
     plt.ylabel("prob density")
     plt.legend()
     plt.grid()
-    plt.xlim(0, 10)
+    plt.xlim(0, 20)
 
     plt.tight_layout()
 
