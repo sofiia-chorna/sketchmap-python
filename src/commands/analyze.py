@@ -8,6 +8,7 @@ from src.utils.const import DEVICE
 def compute_distances(
     points: torch.Tensor, weights: torch.Tensor, weighted: bool = False
 ):
+    # TODO: implement other distance measures, for now, only euclidean
     if torch.is_tensor(points):
         if DEVICE == "gpu":
             points, weights = points.to(DEVICE), weights.to(DEVICE)
