@@ -43,8 +43,9 @@ def weighted(func):
         "--weighted",
         "--w",
         default=False,
+        is_flag=True,
         help="True if data is weighted",
-        type=int,
+        type=bool,
     )(func)
 
 
