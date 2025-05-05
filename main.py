@@ -5,14 +5,17 @@ from typing import Optional
 import click
 import numpy as np
 
-from src.commands.analyze import compute_distances
+from src.commands.distance import DistanceCalculator
 from src.commands.histogram import Histogram
+from src.commands.landmarks import run_get_landmarks
 from src.utils.cli import (
     dimension,
     hdim_filepath,
     max_distance,
     n_bin,
+    num,
     output_filepath,
+    select_mode,
     weighted,
 )
 from src.utils.file import read_file
@@ -47,7 +50,13 @@ def analyse(
     logger.info(f"Read {len(points)} points")
 
     logger.info(f"Start computing distances")
-    distances, dweights = compute_distances(points, weights, weighted)
+
+    # TODO: add param to select metric
+    distance_calculator = DistanceCalculator("euclidean")
+
+    distances, dweights = distance_calculator.pairwise_distances(
+        points, weights, weighted
+    )
     logger.info(f"Calculated {len(distances)} distances")
 
     logger.info(f"Start creating histogram")
@@ -78,8 +87,40 @@ def analyse(
 
 
 @main.command()
-def select_landmarks():
-    pass
+@hdim_filepath
+@num
+@select_mode
+@dimension
+@output_filepath
+@weighted
+def select_landmarks(
+    hdim_filepath: str,
+    num: int = 100,
+    select_mode: str = "minmax",
+    dimension: Optional[int] = None,
+    output_filepath: str = "high_landmarks.dat",
+    weighted: bool = False,
+):
+    logger.info("Start running 'select-landmarks'")
+
+    logger.info(f"Start reading highdim file: {hdim_filepath}")
+    points, weights = read_file(hdim_filepath, dimension, weighted)
+    logger.info(f"Read {len(points)} points")
+
+    logger.info(f"Start selecting high-landmarks")
+    highlandmarks, landmark_weights = run_get_landmarks(
+        points, weights, weighted, num, select_mode
+    )
+
+    logger.info(f"Saving landmarks to {output_filepath}")
+    np.savetxt(output_filepath, highlandmarks.cpu().numpy())
+
+    if weighted:
+        weight_filepath = output_filepath.replace(".dat", "_weights.dat")
+        logger.info(f"Saving landmark weights to {weight_filepath}")
+        np.savetxt(weight_filepath, landmark_weights.cpu().numpy())
+
+    logger.info("Finished landmark selection")
 
 
 @main.command()
