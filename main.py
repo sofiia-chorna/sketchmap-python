@@ -5,7 +5,8 @@ from typing import Optional
 import click
 import numpy as np
 
-from src.commands.dimred import DimRed, auto_select_parameters
+#from src.commands.dimred import DimRed, auto_select_parameters
+from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
 from src.commands.histogram import Histogram
 from src.commands.landmarks import run_get_landmarks
@@ -221,7 +222,15 @@ def dimred(
         logger.error(f"Error reading input file: {e}")
         raise click.Abort()
 
-    params = auto_select_parameters(points, high_dimension, low_dimension)
+    #params = auto_select_parameters(points, high_dimension, low_dimension)
+    params = {
+        "sigma_hd": 7.0,
+        "a_hd": 4,
+        "b_hd": 2,
+        "sigma_ld": 7.0,
+        "a_ld": 2,
+        "b_ld": 2,
+    }
 
     # set up grid parameters if provided => for now not available
     grid_params = None
