@@ -1,52 +1,8 @@
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional, Tuple, Union
 
 import numpy as np
-from scipy.linalg import eigh
-from scipy.optimize import minimize
-from scipy.spatial.distance import pdist, squareform
 import torch
 from src.utils.logger import logger
-from src.utils.const import DEVICE
-
-
-def auto_select_parameters(points, high_dim, low_dim=2):
-    """Automatically determine optimal sigmoid parameters"""
-    # pairwise distances
-    distances = pdist(points)
-    hist, bins = np.histogram(distances, bins=50)
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-
-    # key distribution features
-    # find the first peak (gaussian correlations)
-    peak_idx = np.argmax(hist)
-    first_peak = bin_centers[peak_idx]
-
-    # find where the histogram drops significantly (high-dim effects)
-    q90 = np.percentile(distances, 90)
-
-    # set sigma between the Gaussian peak and high-dim effects
-    sigma_hd = np.clip((first_peak + q90) / 2, first_peak * 1.5, q90 * 0.8)
-
-    # high-dim parameters (based on dimension)
-    a_hd = max(2, min(6, 2 + np.log10(high_dim)))  # Logarithmic scaling
-    b_hd = max(4, min(10, 4 + np.log10(high_dim * 2)))
-
-    # low-dim parameters (more relaxed)
-    a_ld = max(1, a_hd * (low_dim / high_dim))
-    b_ld = max(1, min(2, b_hd * (low_dim / high_dim) * 2))  # Target 1-2
-
-    params = {
-        "sigma_hd": sigma_hd,
-        "a_hd": a_hd,
-        "b_hd": b_hd,
-        "sigma_ld": sigma_hd,
-        "a_ld": a_ld,
-        "b_ld": b_ld,
-    }
-
-    logger.info(f"Params used: {params}")
-
-    return params
 
 
 class DimRed:
@@ -58,6 +14,7 @@ class DimRed:
         period: float = 0.0,
         center: bool = True,
         verbose: bool = False,
+        device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         self.high_dim = high_dim
         self.low_dim = low_dim
@@ -65,17 +22,18 @@ class DimRed:
         self.period = period
         self.center = center
         self.verbose = verbose
+        self.device = device
 
         self.tfun_hd = self._identity_function
         self.tfun_ld = self._identity_function
 
         logger.info(
-            f"Initialized DimRed with high_dim={high_dim}, low_dim={low_dim}, "
-            f"metric={metric}, period={period}, center={center}, verbose={verbose}"
+            f"Initialized DimRedGPU with high_dim={high_dim}, low_dim={low_dim}, "
+            f"metric={metric}, period={period}, center={center}, verbose={verbose}, device={device}"
         )
 
-    def _identity_function(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        return x, np.ones_like(x)
+    def _identity_function(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return x, torch.ones_like(x)
 
     def set_transformation(
         self,
@@ -107,218 +65,226 @@ class DimRed:
             raise ValueError("Space must be 'high' or 'low'")
 
     def _sigmoid_function(self, x, sigma, a, b):
+        sigma = torch.tensor(sigma, device=self.device)
+        a = torch.tensor(a, device=self.device)
+        b = torch.tensor(b, device=self.device)
+
         y = 1 / (1 + (x / sigma) ** a) ** b
         dy = -a * b * (x / sigma) ** (a - 1) * y ** (1 + 1 / b) / sigma
         return y, dy
 
     def _gamma_function(self, x, sigma, n):
+        sigma = torch.tensor(sigma, device=self.device)
+        n = torch.tensor(n, device=self.device)
+
         y = (x / sigma) ** n
         dy = n * (x / sigma) ** (n - 1) / sigma
         return y, dy
 
     def _compute_distance_matrix(
-        self, X: np.ndarray, weights: Optional[np.ndarray] = None
-    ) -> np.ndarray:
+        self, X: torch.Tensor, weights: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         logger.info(f"Computing distance matrix with metric='{self.metric}'")
 
-        if DEVICE == "cuda":
-            X_tensor = torch.from_numpy(X).float().to(self.device)
+        if self.metric == "euclidean":
+            if weights is not None:
+                logger.info("Applying weighted Euclidean distance")
+                if len(weights) != len(X):
+                    raise ValueError("Number of weights must match number of points")
+                weighted_X = X * torch.sqrt(weights.unsqueeze(1))
+                D = torch.cdist(weighted_X, weighted_X)
+                return D
+            return torch.cdist(X, X)
 
-            if self.metric == "euclidean":
-                if weights is not None:
-                    weights_tensor = torch.from_numpy(weights).float().to(self.device)
-                    weighted_X = X_tensor * torch.sqrt(weights_tensor).unsqueeze(1)
-                    dists = torch.cdist(weighted_X, weighted_X)
-                else:
-                    dists = torch.cdist(X_tensor, X_tensor)
-                return dists.cpu().numpy()
+        elif self.metric == "dot":
+            return -torch.matmul(X, X.T)
 
-            elif self.metric == "dot":
-                return -torch.matmul(X_tensor, X_tensor.T).cpu().numpy()
+        elif self.metric == "pbc":
+            if self.period <= 0:
+                raise ValueError("Period must be positive for PBC metric")
+            logger.warning("Using periodic boundary conditions for distance")
+            period = torch.tensor(self.period, device=self.device)
+            # Broadcasting to compute pairwise differences
+            diff = torch.abs(X.unsqueeze(1) - X.unsqueeze(0))
+            diff = torch.where(diff > period / 2, period - diff, diff)
+            return torch.norm(diff, dim=2)
 
-            elif self.metric == "pbc":
-                if self.period <= 0:
-                    raise ValueError("Period must be positive for PBC metric")
-                diff = torch.abs(X_tensor.unsqueeze(1) - X_tensor.unsqueeze(0))
-                diff = torch.where(diff > self.period / 2, self.period - diff, diff)
-                return torch.norm(diff, dim=2).cpu().numpy()
+        else:
+            raise ValueError(f"Unknown metric: {self.metric}")
 
-        else:  # Original CPU implementation
-            if self.metric == "euclidean":
-                if weights is not None:
-                    if len(weights) != len(X):
-                        raise ValueError(
-                            "Number of weights must match number of points"
-                        )
-                    weighted_X = X * np.sqrt(weights[:, np.newaxis])
-                    return squareform(pdist(weighted_X, "euclidean"))
-                return squareform(pdist(X, "euclidean"))
-            elif self.metric == "dot":
-                return -np.dot(X, X.T)
-            elif self.metric == "pbc":
-                if self.period <= 0:
-                    raise ValueError("Period must be positive for PBC metric")
-                diff = np.abs(X[:, None] - X)
-                diff = np.where(diff > self.period / 2, self.period - diff, diff)
-                return np.linalg.norm(diff, axis=-1)
+    def _to_tensor(self, data, dtype=torch.float32):
+        """Convert numpy array or list to torch tensor on the specified device."""
+        if isinstance(data, torch.Tensor):
+            return data.to(device=self.device, dtype=dtype)
+        elif isinstance(data, np.ndarray) or isinstance(data, list):
+            return torch.tensor(data, device=self.device, dtype=dtype)
+        else:
+            raise TypeError(f"Cannot convert {type(data)} to torch.Tensor")
 
     def fit(
         self,
-        X,
-        weights=None,
-        init=None,
-        preopt_steps=100,
-        gopt_steps=0,
-        imix=0.0,
+        X: Union[np.ndarray, torch.Tensor],
+        weights: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        init: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        preopt_steps: int = 100,
+        gopt_steps: int = 0,
+        imix: float = 0.0,
         grid_params=None,
+        learning_rate: float = 0.01,
     ):
-        logger.info("Starting fit process")
+        logger.info("Starting fit process on device: " + self.device)
+
+        # Convert to tensors
+        X = self._to_tensor(X)
+        if weights is not None:
+            weights = self._to_tensor(weights)
+
+        n = X.shape[0]
 
         if self.center:
             logger.info("Centering the data")
-            X = X - np.mean(X, axis=0)
+            X = X - X.mean(dim=0, keepdim=True)
 
+        # Compute distance matrix
         D = (
             X
             if (self.metric == "dot" and X.shape[0] == X.shape[1])
             else self._compute_distance_matrix(X, weights)
         )
 
+        # Initialize embedding
         if init is None:
             if self.verbose:
                 logger.info("Computing initial coordinates using classical MDS")
             init = self._classical_mds(D)
+        else:
+            init = self._to_tensor(init)
 
         if self.verbose:
             logger.info("Beginning optimization")
 
+        # Optimize embedding
         result = self._optimize_embedding(
-            D, init, weights, preopt_steps, gopt_steps, imix, grid_params
+            D, init, weights, preopt_steps, gopt_steps, imix, grid_params, learning_rate
         )
 
         logger.info("Finished fit process")
 
-        return result
+        # Return as numpy array for compatibility
+        return result.cpu().numpy()
 
-    def _classical_mds(self, D):
+    def _classical_mds(self, D: torch.Tensor) -> torch.Tensor:
         logger.info("Performing classical MDS")
-
-        if DEVICE == "cuda":
-            D_tensor = torch.from_numpy(D).float().to(self.device)
-            n = D_tensor.shape[0]
-            H = (
-                torch.eye(n, device=self.device)
-                - torch.ones((n, n), device=self.device) / n
-            )
-            B = -0.5 * H @ (D_tensor**2) @ H
-
-            # Using torch.symeig for older versions, or torch.linalg.eigh for newer
-            try:
-                vals, vecs = torch.linalg.eigh(B)
-            except AttributeError:
-                vals, vecs = torch.symeig(B, eigenvectors=True)
-
-            idx = torch.argsort(vals, descending=True)[: self.low_dim]
-            if self.verbose:
-                logger.info(f"Classical MDS eigenvalues: {vals[idx].cpu().numpy()}")
-            return (vecs[:, idx] * torch.sqrt(vals[idx])).cpu().numpy()
-        else:
-            n = D.shape[0]
-            H = np.eye(n) - np.ones((n, n)) / n
-            B = -0.5 * H @ (D**2) @ H
-            vals, vecs = eigh(B)
-            idx = np.argsort(vals)[::-1][: self.low_dim]
-            if self.verbose:
-                logger.info("Classical MDS eigenvalues: %s", vals[idx])
-            return vecs[:, idx] * np.sqrt(vals[idx])
-
-    def _stress_function(self, y_flat, D, weights, imix):
         n = D.shape[0]
 
-        if DEVICE == "cuda":
-            Y = (
-                torch.from_numpy(y_flat.reshape(n, self.low_dim))
-                .float()
-                .to(self.device)
-            )
-            D_tensor = torch.from_numpy(D).float().to(self.device)
+        # Create centering matrix H
+        H = (
+            torch.eye(n, device=self.device)
+            - torch.ones((n, n), device=self.device) / n
+        )
 
-            # Compute low-dimensional distances
-            d = torch.cdist(Y, Y).cpu().numpy()
+        # Double-center the squared distance matrix
+        B = -0.5 * H @ (D**2) @ H
 
-            # Compute transformed distances
-            fD, dfD = self.tfun_hd(D)
-            fd, dfd = self.tfun_ld(d)
+        # Eigendecomposition
+        vals, vecs = torch.linalg.eigh(B)
 
-            chi_id = torch.sum(
-                (D_tensor - torch.from_numpy(d).to(self.device)) ** 2
-            ).item()
-            chi_fun = torch.sum(
-                (
-                    torch.from_numpy(fD).to(self.device)
-                    - torch.from_numpy(fd).to(self.device)
-                )
-                ** 2
-            ).item()
-        else:
-            Y = y_flat.reshape(n, self.low_dim)
-            d = squareform(pdist(Y, "euclidean"))
+        # Sort eigenvalues in descending order and select top k
+        idx = torch.argsort(vals, descending=True)[: self.low_dim]
 
-            fD, dfD = self.tfun_hd(D)
-            fd, dfd = self.tfun_ld(d)
+        if self.verbose:
+            logger.info(f"Classical MDS eigenvalues: {vals[idx].cpu().numpy()}")
 
-            chi_id = np.sum((D - d) ** 2)
-            chi_fun = np.sum((fD - fd) ** 2)
+        # Return scaled eigenvectors
+        return vecs[:, idx] * torch.sqrt(vals[idx])
 
+    def _stress_function(
+        self,
+        Y: torch.Tensor,
+        D: torch.Tensor,
+        weights: Optional[torch.Tensor],
+        imix: float,
+    ) -> torch.Tensor:
+        d = torch.cdist(Y, Y)
+
+        # Apply transformations
+        fD, dfD = self.tfun_hd(D)
+        fd, dfd = self.tfun_ld(d)
+
+        # Calculate stress components
+        chi_id = torch.sum((D - d) ** 2)
+        chi_fun = torch.sum((fD - fd) ** 2)
+
+        # Combine stresses
         stress = imix * chi_id + (1 - imix) * chi_fun
+
         if self.verbose:
             logger.info(
-                f"Stress: chi_id={chi_id:.4f}, chi_fun={chi_fun:.4f}, total={stress:.4f}"
+                f"Stress: chi_id={chi_id.item():.4f}, chi_fun={chi_fun.item():.4f}, total={stress.item():.4f}"
             )
+
         return stress
 
     def _optimize_embedding(
-        self, D, init, weights, preopt_steps, gopt_steps, imix, grid_params
-    ):
+        self,
+        D: torch.Tensor,
+        init: torch.Tensor,
+        weights: Optional[torch.Tensor],
+        preopt_steps: int,
+        gopt_steps: int,
+        imix: float,
+        grid_params,
+        learning_rate: float,
+    ) -> torch.Tensor:
+        """Optimize the embedding using PyTorch's automatic differentiation."""
         n = D.shape[0]
-        y0 = init.flatten()
 
-        # Multi-stage optimization
-        results = []
+        Y = init.clone().detach().requires_grad_(True)
 
-        # Stage 1: Coarse optimization
-        res = minimize(
-            fun=self._stress_function,
-            x0=y0,
-            args=(D, weights, imix),
-            method="L-BFGS-B",
-            options={"maxiter": preopt_steps // 2, "disp": self.verbose},
-        )
-        results.append(res.fun)
-        y0 = res.x
+        optimizer = torch.optim.Adam([Y], lr=learning_rate)
 
-        # Stage 2: Refined optimization with momentum
-        res = minimize(
-            fun=self._stress_function,
-            x0=y0,
-            args=(D, weights, imix),
-            method="CG",  # Conjugate gradient often works better
-            options={"maxiter": preopt_steps // 2, "disp": self.verbose},
-        )
-        results.append(res.fun)
+        # Pre-optimization
+        if preopt_steps > 0:
+            logger.info(f"Running pre-optimization for {preopt_steps} steps")
 
-        # Stage 3: Final polish
-        if gopt_steps > 0:
-            res = minimize(
-                fun=self._stress_function,
-                x0=res.x,
-                args=(D, weights, imix),
-                method="L-BFGS-B",
-                options={"maxiter": gopt_steps, "gtol": 1e-6, "disp": self.verbose},
-            )
-            results.append(res.fun)
+            for step in range(preopt_steps):
+                optimizer.zero_grad()
 
-        if self.verbose:
-            logger.info(f"Optimization progression: {results}")
+                loss = self._stress_function(Y, D, weights, imix)
+                loss.backward()
 
-        return res.x.reshape(n, self.low_dim)
+                optimizer.step()
+
+                if self.verbose and (step + 1) % 10 == 0:
+                    logger.info(
+                        f"Step {step + 1}/{preopt_steps}, Loss: {loss.item():.6f}"
+                    )
+
+            logger.info("Pre-optimization completed")
+
+        # Global optimization (if requested)
+        if gopt_steps > 0 and grid_params is not None:
+            logger.info(f"Running global optimization for {gopt_steps} steps")
+            grid_width, coarse_pts, fine_pts = grid_params
+
+            optimizer = torch.optim.LBFGS([Y], lr=learning_rate)
+
+            def closure():
+                optimizer.zero_grad()
+                loss = self._stress_function(Y, D, weights, imix)
+                loss.backward()
+                return loss
+
+            for step in range(gopt_steps):
+                optimizer.step(closure)
+
+                if self.verbose and (step + 1) % 10 == 0:
+                    loss = self._stress_function(Y, D, weights, imix)
+                    logger.info(
+                        f"Global opt step {step + 1}/{gopt_steps}, Loss: {loss.item():.6f}"
+                    )
+
+            logger.info("Global optimization completed")
+
+        # Return the optimized embedding (detach to remove from computation graph)
+        return Y.detach()
