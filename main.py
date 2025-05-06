@@ -5,7 +5,7 @@ from typing import Optional
 import click
 import numpy as np
 
-from src.commands.dimred import DimRed
+from src.commands.dimred import DimRed, auto_select_parameters
 from src.commands.distance import DistanceCalculator
 from src.commands.histogram import Histogram
 from src.commands.landmarks import run_get_landmarks
@@ -168,12 +168,6 @@ def select_landmarks(
 @click.option(
     "--weighted/--no-weighted", default=False, help="Use weights from input file"
 )
-@click.option("--sigma-hd", type=float, default=6.0, help="High-dim sigma parameter")
-@click.option("--a-hd", type=float, default=2.0, help="High-dim a parameter")
-@click.option("--b-hd", type=float, default=6.0, help="High-dim b parameter")
-@click.option("--sigma-ld", type=float, default=6.0, help="Low-dim sigma parameter")
-@click.option("--a-ld", type=float, default=2.0, help="Low-dim a parameter")
-@click.option("--b-ld", type=float, default=6.0, help="Low-dim b parameter")
 @click.option(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
 )
@@ -196,12 +190,6 @@ def dimred(
     period: float = 0.0,
     metric: str = "euclidean",
     weighted: bool = False,
-    sigma_hd: float = 6.0,
-    a_hd: float = 2.0,
-    b_hd: float = 6.0,
-    sigma_ld: float = 6.0,
-    a_ld: float = 2.0,
-    b_ld: float = 6.0,
     preopt_steps: int = 100,
     gopt_steps: int = 0,
     imix: float = 0.0,
@@ -233,6 +221,8 @@ def dimred(
         logger.error(f"Error reading input file: {e}")
         raise click.Abort()
 
+    params = auto_select_parameters(points, high_dimension, low_dimension)
+
     # set up grid parameters if provided => for now not available
     grid_params = None
     if all(p is not None for p in [grid_width, coarse_pts, fine_pts]):
@@ -247,8 +237,12 @@ def dimred(
         verbose=verbose,
     )
 
-    reducer.set_transformation("high", "sigmoid", (sigma_hd, a_hd, b_hd))
-    reducer.set_transformation("low", "sigmoid", (sigma_ld, a_ld, b_ld))
+    reducer.set_transformation(
+        "high", "sigmoid", (params["sigma_hd"], params["a_hd"], params["b_hd"])
+    )
+    reducer.set_transformation(
+        "low", "sigmoid", (params["sigma_ld"], params["a_ld"], params["b_ld"])
+    )
 
     try:
         logger.info("Starting dimensionality reduction")

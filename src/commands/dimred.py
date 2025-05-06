@@ -4,8 +4,9 @@ import numpy as np
 from scipy.linalg import eigh
 from scipy.optimize import minimize
 from scipy.spatial.distance import pdist, squareform
-
+import torch
 from src.utils.logger import logger
+from src.utils.const import DEVICE
 
 
 def auto_select_parameters(points, high_dim, low_dim=2):
@@ -120,28 +121,46 @@ class DimRed:
     ) -> np.ndarray:
         logger.info(f"Computing distance matrix with metric='{self.metric}'")
 
-        if self.metric == "euclidean":
-            if weights is not None:
-                logger.info("Applying weighted Euclidean distance")
-                if len(weights) != len(X):
-                    raise ValueError("Number of weights must match number of points")
-                weighted_X = X * np.sqrt(weights[:, np.newaxis])
-                return squareform(pdist(weighted_X, "euclidean"))
-            return squareform(pdist(X, "euclidean"))
+        if DEVICE == "cuda":
+            X_tensor = torch.from_numpy(X).float().to(self.device)
 
-        elif self.metric == "dot":
-            return -np.dot(X, X.T)
+            if self.metric == "euclidean":
+                if weights is not None:
+                    weights_tensor = torch.from_numpy(weights).float().to(self.device)
+                    weighted_X = X_tensor * torch.sqrt(weights_tensor).unsqueeze(1)
+                    dists = torch.cdist(weighted_X, weighted_X)
+                else:
+                    dists = torch.cdist(X_tensor, X_tensor)
+                return dists.cpu().numpy()
 
-        elif self.metric == "pbc":
-            if self.period <= 0:
-                raise ValueError("Period must be positive for PBC metric")
-            logger.warning("Using periodic boundary conditions for distance")
-            diff = np.abs(X[:, None] - X)
-            diff = np.where(diff > self.period / 2, self.period - diff, diff)
-            return np.linalg.norm(diff, axis=-1)
+            elif self.metric == "dot":
+                return -torch.matmul(X_tensor, X_tensor.T).cpu().numpy()
 
-        else:
-            raise ValueError(f"Unknown metric: {self.metric}")
+            elif self.metric == "pbc":
+                if self.period <= 0:
+                    raise ValueError("Period must be positive for PBC metric")
+                diff = torch.abs(X_tensor.unsqueeze(1) - X_tensor.unsqueeze(0))
+                diff = torch.where(diff > self.period / 2, self.period - diff, diff)
+                return torch.norm(diff, dim=2).cpu().numpy()
+
+        else:  # Original CPU implementation
+            if self.metric == "euclidean":
+                if weights is not None:
+                    if len(weights) != len(X):
+                        raise ValueError(
+                            "Number of weights must match number of points"
+                        )
+                    weighted_X = X * np.sqrt(weights[:, np.newaxis])
+                    return squareform(pdist(weighted_X, "euclidean"))
+                return squareform(pdist(X, "euclidean"))
+            elif self.metric == "dot":
+                return -np.dot(X, X.T)
+            elif self.metric == "pbc":
+                if self.period <= 0:
+                    raise ValueError("Period must be positive for PBC metric")
+                diff = np.abs(X[:, None] - X)
+                diff = np.where(diff > self.period / 2, self.period - diff, diff)
+                return np.linalg.norm(diff, axis=-1)
 
     def fit(
         self,
@@ -183,26 +202,73 @@ class DimRed:
 
     def _classical_mds(self, D):
         logger.info("Performing classical MDS")
-        n = D.shape[0]
-        H = np.eye(n) - np.ones((n, n)) / n
-        B = -0.5 * H @ (D**2) @ H
 
-        vals, vecs = eigh(B)
-        idx = np.argsort(vals)[::-1][: self.low_dim]
-        if self.verbose:
-            logger.info("Classical MDS eigenvalues: %s", vals[idx])
-        return vecs[:, idx] * np.sqrt(vals[idx])
+        if DEVICE == "cuda":
+            D_tensor = torch.from_numpy(D).float().to(self.device)
+            n = D_tensor.shape[0]
+            H = (
+                torch.eye(n, device=self.device)
+                - torch.ones((n, n), device=self.device) / n
+            )
+            B = -0.5 * H @ (D_tensor**2) @ H
+
+            # Using torch.symeig for older versions, or torch.linalg.eigh for newer
+            try:
+                vals, vecs = torch.linalg.eigh(B)
+            except AttributeError:
+                vals, vecs = torch.symeig(B, eigenvectors=True)
+
+            idx = torch.argsort(vals, descending=True)[: self.low_dim]
+            if self.verbose:
+                logger.info(f"Classical MDS eigenvalues: {vals[idx].cpu().numpy()}")
+            return (vecs[:, idx] * torch.sqrt(vals[idx])).cpu().numpy()
+        else:
+            n = D.shape[0]
+            H = np.eye(n) - np.ones((n, n)) / n
+            B = -0.5 * H @ (D**2) @ H
+            vals, vecs = eigh(B)
+            idx = np.argsort(vals)[::-1][: self.low_dim]
+            if self.verbose:
+                logger.info("Classical MDS eigenvalues: %s", vals[idx])
+            return vecs[:, idx] * np.sqrt(vals[idx])
 
     def _stress_function(self, y_flat, D, weights, imix):
         n = D.shape[0]
-        Y = y_flat.reshape(n, self.low_dim)
-        d = squareform(pdist(Y, "euclidean"))
 
-        fD, dfD = self.tfun_hd(D)
-        fd, dfd = self.tfun_ld(d)
+        if DEVICE == "cuda":
+            Y = (
+                torch.from_numpy(y_flat.reshape(n, self.low_dim))
+                .float()
+                .to(self.device)
+            )
+            D_tensor = torch.from_numpy(D).float().to(self.device)
 
-        chi_id = np.sum((D - d) ** 2)
-        chi_fun = np.sum((fD - fd) ** 2)
+            # Compute low-dimensional distances
+            d = torch.cdist(Y, Y).cpu().numpy()
+
+            # Compute transformed distances
+            fD, dfD = self.tfun_hd(D)
+            fd, dfd = self.tfun_ld(d)
+
+            chi_id = torch.sum(
+                (D_tensor - torch.from_numpy(d).to(self.device)) ** 2
+            ).item()
+            chi_fun = torch.sum(
+                (
+                    torch.from_numpy(fD).to(self.device)
+                    - torch.from_numpy(fd).to(self.device)
+                )
+                ** 2
+            ).item()
+        else:
+            Y = y_flat.reshape(n, self.low_dim)
+            d = squareform(pdist(Y, "euclidean"))
+
+            fD, dfD = self.tfun_hd(D)
+            fd, dfd = self.tfun_ld(d)
+
+            chi_id = np.sum((D - d) ** 2)
+            chi_fun = np.sum((fD - fd) ** 2)
 
         stress = imix * chi_id + (1 - imix) * chi_fun
         if self.verbose:
