@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -17,69 +17,79 @@ class DistanceCalculator:
         self.metric = metric
         self.period = period
         self.sphere_period = sphere_period
+        if metric == "pbc" and period <= 0:
+            raise ValueError("Period must be positive for PBC metric")
+        if metric == "sphere" and sphere_period <= 0:
+            raise ValueError("Sphere period must be positive")
 
-    def single_distance(self, x: np.ndarray, y: np.ndarray) -> float:
+    def single_distance(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        x = x.to(DEVICE)
+        y = y.to(DEVICE)
         match self.metric:
             case "euclidean":
-                return np.linalg.norm(x - y)
+                return torch.norm(x - y)
             case "dot":
-                return -np.dot(x, y)
+                return -torch.dot(x, y)
             case "pbc":
-                diff = np.abs(x - y)
-                diff = np.where(diff > self.period / 2, self.period - diff, diff)
-                return np.linalg.norm(diff)
+                diff = torch.abs(x - y)
+                diff = torch.where(diff > self.period / 2, self.period - diff, diff)
+                return torch.norm(diff)
             case "sphere":
-                # simplified spherical distance, TODO: fix
-                return np.linalg.norm(x - y)
+                cos_angle = torch.dot(x, y) / (torch.norm(x) * torch.norm(y))
+                cos_angle = torch.clamp(cos_angle, -1.0, 1.0)
+                angle = torch.acos(cos_angle)
+                return self.sphere_period * angle / (2 * np.pi)
             case _:
                 raise ValueError(f"Unknown distance metric: {self.metric}")
 
     def pairwise_distances(
-        self, points: torch.Tensor, weights: torch.Tensor = None, weighted: bool = False
-    ) -> tuple[np.ndarray, np.ndarray]:
-        if torch.is_tensor(points):
-            if DEVICE == "gpu":
-                points = points.to(DEVICE)
-                if weights is not None:
-                    weights = weights.to(DEVICE)
+        self,
+        points: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        weighted: bool = False,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if not torch.is_tensor(points):
+            points = torch.tensor(points, dtype=torch.float32)
 
-            # pairwise distances
-            match self.metric:
-                case "euclidean":
-                    dist_matrix = torch.cdist(points, points)
-                case "dot":
-                    dist_matrix = -torch.matmul(points, points.T)
-                case _:
-                    raise ValueError(f"Unknown distance metric: {self.metric}")
+        points = points.to(DEVICE)
+        n = points.shape[0]
 
-            # here we get upper trianglular part of the matrix to exlude duplications and self-distances
-            rows, cols = torch.triu_indices(len(points), len(points), offset=1)
-            distances = dist_matrix[rows, cols]
+        if weights is not None:
+            weights = weights.to(DEVICE)
+            if weights.shape != (n,):
+                raise ValueError(
+                    f"Weights shape {weights.shape} must match points ({n},)"
+                )
 
-            if weighted and weights is not None:
-                dweights = torch.outer(weights, weights)[rows, cols]
-            else:
-                dweights = torch.ones_like(distances)
+        # Compute pairwise distances
+        match self.metric:
+            case "euclidean":
+                dist_matrix = torch.cdist(points, points, p=2)
+            case "dot":
+                dist_matrix = -torch.matmul(points, points.T)
+            case "pbc":
+                # Pairwise differences
+                diff = points.unsqueeze(1) - points.unsqueeze(0)  # Shape: (n, n, d)
+                diff = torch.abs(diff)
+                diff = torch.where(diff > self.period / 2, self.period - diff, diff)
+                dist_matrix = torch.norm(diff, dim=-1)
+            case "sphere":
+                # Great-circle distances
+                norms = torch.norm(points, dim=1, keepdim=True)
+                cos_angles = torch.matmul(points, points.T) / (norms * norms.T)
+                cos_angles = torch.clamp(cos_angles, -1.0, 1.0)
+                angles = torch.acos(cos_angles)
+                dist_matrix = self.sphere_period * angles / (2 * np.pi)
+            case _:
+                raise ValueError(f"Unknown distance metric: {self.metric}")
 
-            return distances.cpu().numpy(), dweights.cpu().numpy()
+        rows, cols = torch.triu_indices(n, n, offset=1)
+        distances = dist_matrix[rows, cols]
 
-        else:  # numpy array
-            if self.metric == "euclidean":
-                distances = pdist(points, "euclidean")
-            else:
-                # for non-euclidean metrics with numpy
-                n = len(points)
-                distances = np.zeros(n * (n - 1) // 2)
-                idx = 0
-                for i in range(n):
-                    for j in range(i + 1, n):
-                        distances[idx] = self.single_distance(points[i], points[j])
-                        idx += 1
+        # Compute weights
+        if weighted and weights is not None:
+            dweights = weights[rows] * weights[cols]
+        else:
+            dweights = torch.ones_like(distances)
 
-            if weighted and weights is not None:
-                indices = np.triu_indices(len(weights), k=1)
-                dweights = np.outer(weights, weights)[indices]
-            else:
-                dweights = np.ones_like(distances)
-
-            return distances, dweights
+        return distances.cpu().numpy(), dweights.cpu().numpy()
