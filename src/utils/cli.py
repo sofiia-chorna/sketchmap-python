@@ -42,7 +42,7 @@ def weighted(func):
     return click.option(
         "--weighted",
         "--w",
-        default=False,
+        default=True,
         is_flag=True,
         help="True if data is weighted",
         type=bool,
