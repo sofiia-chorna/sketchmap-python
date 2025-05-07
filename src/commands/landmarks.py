@@ -1,125 +1,145 @@
-from typing import Literal
+from typing import Literal, Optional, Tuple
 
-import numpy as np
 import torch
 from tqdm import tqdm
 
 from src.commands.distance import DistanceCalculator
+from src.utils.const import DEVICE
 
 
 def run_get_landmarks(
     points: torch.Tensor,
-    weights: torch.Tensor,
+    weights: Optional[torch.Tensor] = None,
     weighted: bool = False,
     num: int = 1000,
-    mode: Literal["minmax", "random"] = "minmax",
+    mode: Literal["minmax"] = "minmax",
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
     period: float = 0.0,
     sphere_period: float = 0.0,
     first_index: int = -1,
     seed: int = 42,
-):
+    weight_gamma: float = 1.0,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+    torch.manual_seed(seed)
+
+    N, _D = points.shape
+
+    if weights is None:
+        weights = torch.ones(N, device=DEVICE)
+    elif weights.device != DEVICE:
+        weights = weights.to(DEVICE)
+
     calculator = DistanceCalculator(metric, period, sphere_period)
 
     if mode == "minmax":
-        return _minmax_selection(
-            calculator,
-            points,
-            weights,
-            num,
-            first_index,
-            weighted,
-            seed,
+        landmarks, landmark_indices, landmark_weights = _minmax_selection(
+            calculator=calculator,
+            points=points,
+            weights=weights,
+            num=num,
+            first_index=first_index,
+            weighted=weighted,
+            weight_gamma=weight_gamma,
         )
     else:
-        raise ValueError(f"Unsupported mode: {mode}")
+        raise ValueError(f"Unsupported selection mode: {mode}")
+
+    return landmarks, landmark_indices, landmark_weights
 
 
 def _minmax_selection(
-    calculator,
-    points,
-    weights,
-    num,
-    first_index,
-    weighted=False,
-    seed=42,
-    min_distance=1e-4,
-):
-    N, D = points.shape
+    calculator: DistanceCalculator,
+    points: torch.Tensor,
+    weights: torch.Tensor,
+    num: int,
+    first_index: int = -1,
+    weighted: bool = False,
+    weight_gamma: float = 1.0,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
-    # 1. Normalize points using robust scaling
-    points_mean = points.mean(dim=0)
-    points_std = points.std(dim=0)
-    points_norm = (points - points_mean) / (points_std + 1e-8)
+    N, _D = points.shape
 
-    # 2. Initialize landmarks and distances
-    landmarks = torch.zeros((num, D), device=points.device)
-    landmark_indices = torch.zeros(num, dtype=torch.long, device=points.device)
+    landmark_indices = torch.zeros(num, dtype=torch.long, device=DEVICE)
 
-    # 3. Select first point
+    # select first indices
     if first_index < 0:
-        first_idx = torch.randint(0, N, (1,), device=points.device).item()
+        landmark_indices[0] = torch.randint(0, N, (1,), device=DEVICE)
     else:
-        first_idx = first_index
+        landmark_indices[0] = first_index
 
-    landmarks[0] = points_norm[first_idx]
-    landmark_indices[0] = first_idx
+    # init min distances
+    min_dists = torch.tensor(
+        [
+            calculator.single_distance(points[landmark_indices[0]], points[j])
+            for j in range(N)
+        ],
+        device=DEVICE,
+    )
 
-    # 4. Compute all distances to first landmark
-    dist_matrix = torch.cdist(points_norm, landmarks[:1].unsqueeze(0)).squeeze()
-    min_dists = dist_matrix.clone()
+    pbar = tqdm(range(1, num), desc="Selecting landmarks")
 
-    selected_indices = {first_idx}
-
-    # 5. Select remaining landmarks
-    for i in tqdm(range(1, num), desc="Selecting landmarks"):
-        # Find valid candidates
-        valid_mask = torch.ones(N, dtype=torch.bool, device=points.device)
-        valid_mask[list(selected_indices)] = False
-        valid_mask &= min_dists > min_distance
-
-        if not valid_mask.any():
-            valid_mask = torch.ones(N, dtype=torch.bool, device=points.device)
-            valid_mask[list(selected_indices)] = False
-
-        valid_indices = torch.where(valid_mask)[0]
-
-        if len(valid_indices) == 0:
-            raise ValueError("No valid points remaining for selection")
-
-        # Select point with maximum minimum distance
-        max_idx = valid_indices[torch.argmax(min_dists[valid_indices])].item()
-
-        # Add to landmarks
-        landmarks[i] = points_norm[max_idx]
+    for i in pbar:
+        # find point with maximum min distance
+        max_idx = torch.argmax(min_dists).item()
         landmark_indices[i] = max_idx
-        selected_indices.add(max_idx)
 
-        # Update minimum distances
-        new_dists = torch.cdist(
-            points_norm, landmarks[i : i + 1].unsqueeze(0)
-        ).squeeze()
+        # update min distances
+        new_dists = torch.tensor(
+            [calculator.single_distance(points[max_idx], points[j]) for j in range(N)],
+            device=DEVICE,
+        )
+
         min_dists = torch.minimum(min_dists, new_dists)
 
-    # 6. Convert back to original space
-    landmarks = landmarks * (points_std + 1e-8) + points_mean
+        pbar.set_postfix({"max_dist": min_dists.max().item()})
+
+    landmarks = points[landmark_indices]
 
     if weighted:
         landmark_weights = _compute_voronoi_weights(
-            points, weights, landmarks, calculator
+            points, weights, landmarks, calculator, weight_gamma
         )
     else:
-        landmark_weights = torch.ones(num, device=points.device)
+        landmark_weights = torch.ones(num, device=DEVICE) / num
 
-    return landmarks, landmark_weights
+    return landmarks, landmark_indices, landmark_weights
 
 
-def _compute_voronoi_weights(points, weights, landmarks, calculator):
-    # Compute distances from all points to landmarks
-    dists = calculator.pairwise_distances(points, landmarks)  # N x num_landmarks
-    min_indices = torch.argmin(
-        dists, dim=1
-    )  # For each point, index of nearest landmark
-    landmark_weights = torch.zeros(len(landmarks), device=points.device)
-    landmark_weights.index_add_(0, min_indices, weights)
+def _compute_voronoi_weights(
+    points: torch.Tensor,
+    weights: torch.Tensor,
+    landmarks: torch.Tensor,
+    calculator: DistanceCalculator,
+    weight_gamma: float = 1.0,
+) -> torch.Tensor:
+    n_landmarks = landmarks.shape[0]
+
+    # calculate distances from all points to all landmarks
+    distances = torch.stack(
+        [
+            torch.tensor(
+                [calculator.single_distance(p, l) for l in landmarks], device=DEVICE
+            )
+            for p in points
+        ]
+    )
+
+    # find nearest landmark for each point
+    min_indices = torch.argmin(distances, dim=1)
+
+    # vectorize weight accumulation
+    landmark_weights = torch.zeros(n_landmarks, device=DEVICE)
+    landmark_weights.scatter_add_(0, min_indices, weights)
+
+    if weight_gamma != 1.0:
+        landmark_weights = landmark_weights.pow(weight_gamma)
+
+    # normalize
+    weight_sum = landmark_weights.sum()
+    if weight_sum > 1e-10:
+        landmark_weights = landmark_weights / weight_sum
+    else:
+        landmark_weights = torch.ones_like(landmark_weights) / n_landmarks
+
     return landmark_weights
