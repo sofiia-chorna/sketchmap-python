@@ -68,14 +68,8 @@ def _minmax_selection(
     else:
         landmark_indices[0] = first_index
 
-    # init min distances
-    min_dists = torch.tensor(
-        [
-            calculator.single_distance(points[landmark_indices[0]], points[j])
-            for j in range(N)
-        ],
-        device=DEVICE,
-    )
+    all_dists = calculator.pairwise_distances(points, points)
+    min_dists = all_dists[landmark_indices[0]]
 
     pbar = tqdm(range(1, num), desc="Selecting landmarks")
 
@@ -84,11 +78,7 @@ def _minmax_selection(
         max_idx = torch.argmax(min_dists).item()
         landmark_indices[i] = max_idx
 
-        # update min distances
-        new_dists = torch.tensor(
-            [calculator.single_distance(points[max_idx], points[j]) for j in range(N)],
-            device=DEVICE,
-        )
+        new_dists = all_dists[max_idx]
 
         min_dists = torch.minimum(min_dists, new_dists)
 
