@@ -25,6 +25,7 @@ class DistanceCalculator:
     def single_distance(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         x = x.to(DEVICE)
         y = y.to(DEVICE)
+
         match self.metric:
             case "euclidean":
                 return torch.norm(x - y)
@@ -46,35 +47,25 @@ class DistanceCalculator:
         self,
         points: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
-        weighted: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        return_weights: bool = False,
+    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
         if not torch.is_tensor(points):
             points = torch.tensor(points, dtype=torch.float32)
 
         points = points.to(DEVICE)
         n = points.shape[0]
 
-        if weights is not None:
-            weights = weights.to(DEVICE)
-            if weights.shape != (n,):
-                raise ValueError(
-                    f"Weights shape {weights.shape} must match points ({n},)"
-                )
-
-        # Compute pairwise distances
         match self.metric:
             case "euclidean":
                 dist_matrix = torch.cdist(points, points, p=2)
             case "dot":
                 dist_matrix = -torch.matmul(points, points.T)
             case "pbc":
-                # Pairwise differences
-                diff = points.unsqueeze(1) - points.unsqueeze(0)  # Shape: (n, n, d)
+                diff = points.unsqueeze(1) - points.unsqueeze(0)
                 diff = torch.abs(diff)
                 diff = torch.where(diff > self.period / 2, self.period - diff, diff)
                 dist_matrix = torch.norm(diff, dim=-1)
             case "sphere":
-                # Great-circle distances
                 norms = torch.norm(points, dim=1, keepdim=True)
                 cos_angles = torch.matmul(points, points.T) / (norms * norms.T)
                 cos_angles = torch.clamp(cos_angles, -1.0, 1.0)
@@ -83,13 +74,20 @@ class DistanceCalculator:
             case _:
                 raise ValueError(f"Unknown distance metric: {self.metric}")
 
-        rows, cols = torch.triu_indices(n, n, offset=1)
-        distances = dist_matrix[rows, cols]
+        if torch.isnan(dist_matrix).any():
+            nan_count = torch.isnan(dist_matrix).sum()
+            raise ValueError(f"Distance matrix contains {nan_count} NaN values")
 
-        # Compute weights
-        if weighted and weights is not None:
-            dweights = weights[rows] * weights[cols]
-        else:
-            dweights = torch.ones_like(distances)
+        if return_weights and weights is not None:
+            weights = weights.to(DEVICE)
+            if weights.shape != (n,):
+                raise ValueError(
+                    f"Weights shape {weights.shape} must match points ({n},)"
+                )
 
-        return distances.cpu().numpy(), dweights.cpu().numpy()
+            # Compute weight products for all pairs
+            weight_matrix = weights.unsqueeze(1) * weights.unsqueeze(0)
+
+            return dist_matrix, weight_matrix
+
+        return dist_matrix
