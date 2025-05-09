@@ -3,6 +3,7 @@ from typing import Literal, Optional, Tuple, Union
 import numpy as np
 import torch
 from src.utils.logger import logger
+from src.utils.const import DEVICE
 
 
 class DimRed:
@@ -14,7 +15,6 @@ class DimRed:
         period: float = 0.0,
         center: bool = True,
         verbose: bool = False,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         self.high_dim = high_dim
         self.low_dim = low_dim
@@ -22,14 +22,13 @@ class DimRed:
         self.period = period
         self.center = center
         self.verbose = verbose
-        self.device = device
 
         self.tfun_hd = self._identity_function
         self.tfun_ld = self._identity_function
 
         logger.info(
-            f"Initialized DimRedGPU with high_dim={high_dim}, low_dim={low_dim}, "
-            f"metric={metric}, period={period}, center={center}, verbose={verbose}, device={device}"
+            f"Initialized DimRed with high_dim={high_dim}, low_dim={low_dim}, "
+            f"metric={metric}, period={period}, center={center}, verbose={verbose}, device={DEVICE}"
         )
 
     def _identity_function(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -38,48 +37,41 @@ class DimRed:
     def set_transformation(
         self,
         space: Literal["high", "low"],
-        fun_type: Literal["identity", "sigmoid", "gamma"],
+        fun_type: Literal["identity", "sigmoid"],
         params: Tuple[float, ...],
     ):
         logger.info(
             f"Setting {space}-dim transformation to {fun_type} with params={params}"
         )
-        if fun_type == "identity":
+        if fun_type == "sigmoid":
             func = self._identity_function
-        elif fun_type == "sigmoid":
             if len(params) != 3:
                 raise ValueError("Sigmoid function requires 3 parameters (sigma, a, b)")
             func = lambda x: self._sigmoid_function(x, *params)
-        elif fun_type == "gamma":
-            if len(params) != 2:
-                raise ValueError("Gamma function requires 2 parameters (sigma, n)")
-            func = lambda x: self._gamma_function(x, *params)
         else:
             raise ValueError(f"Unknown function type: {fun_type}")
 
         if space == "high":
             self.tfun_hd = func
-        elif space == "low":
-            self.tfun_ld = func
         else:
-            raise ValueError("Space must be 'high' or 'low'")
+            self.tfun_ld = func
 
     def _sigmoid_function(self, x, sigma, a, b):
-        sigma = torch.tensor(sigma, device=self.device)
-        a = torch.tensor(a, device=self.device)
-        b = torch.tensor(b, device=self.device)
+        sigma = torch.tensor(sigma, device=DEVICE)
+        a = torch.tensor(a, device=DEVICE)
+        b = torch.tensor(b, device=DEVICE)
 
         y = 1 / (1 + (x / sigma) ** a) ** b
         dy = -a * b * (x / sigma) ** (a - 1) * y ** (1 + 1 / b) / sigma
         return y, dy
 
-    def _gamma_function(self, x, sigma, n):
-        sigma = torch.tensor(sigma, device=self.device)
-        n = torch.tensor(n, device=self.device)
-
-        y = (x / sigma) ** n
-        dy = n * (x / sigma) ** (n - 1) / sigma
-        return y, dy
+    def _to_tensor(self, data, dtype=torch.float32):
+        if isinstance(data, torch.Tensor):
+            return data.to(device=DEVICE, dtype=dtype)
+        elif isinstance(data, np.ndarray) or isinstance(data, list):
+            return torch.tensor(data, device=DEVICE, dtype=dtype)
+        else:
+            raise TypeError(f"Cannot convert {type(data)} to torch.Tensor")
 
     def _compute_distance_matrix(
         self, X: torch.Tensor, weights: Optional[torch.Tensor] = None
@@ -89,99 +81,24 @@ class DimRed:
         if self.metric == "euclidean":
             if weights is not None:
                 logger.info("Applying weighted Euclidean distance")
-                if len(weights) != len(X):
-                    raise ValueError("Number of weights must match number of points")
+
                 weighted_X = X * torch.sqrt(weights.unsqueeze(1))
-                D = torch.cdist(weighted_X, weighted_X)
-                return D
+                return torch.cdist(weighted_X, weighted_X)
+
             return torch.cdist(X, X)
 
         elif self.metric == "dot":
             return -torch.matmul(X, X.T)
 
-        elif self.metric == "pbc":
-            if self.period <= 0:
-                raise ValueError("Period must be positive for PBC metric")
-            logger.warning("Using periodic boundary conditions for distance")
-            period = torch.tensor(self.period, device=self.device)
-            # Broadcasting to compute pairwise differences
-            diff = torch.abs(X.unsqueeze(1) - X.unsqueeze(0))
-            diff = torch.where(diff > period / 2, period - diff, diff)
-            return torch.norm(diff, dim=2)
-
         else:
             raise ValueError(f"Unknown metric: {self.metric}")
-
-    def _to_tensor(self, data, dtype=torch.float32):
-        """Convert numpy array or list to torch tensor on the specified device."""
-        if isinstance(data, torch.Tensor):
-            return data.to(device=self.device, dtype=dtype)
-        elif isinstance(data, np.ndarray) or isinstance(data, list):
-            return torch.tensor(data, device=self.device, dtype=dtype)
-        else:
-            raise TypeError(f"Cannot convert {type(data)} to torch.Tensor")
-
-    def fit(
-        self,
-        X: Union[np.ndarray, torch.Tensor],
-        weights: Optional[Union[np.ndarray, torch.Tensor]] = None,
-        init: Optional[Union[np.ndarray, torch.Tensor]] = None,
-        preopt_steps: int = 100,
-        gopt_steps: int = 0,
-        imix: float = 0.0,
-        grid_params=None,
-        learning_rate: float = 0.01,
-    ):
-        logger.info("Starting fit process on device: " + self.device)
-
-        # Convert to tensors
-        X = self._to_tensor(X)
-        if weights is not None:
-            weights = self._to_tensor(weights)
-
-        n = X.shape[0]
-
-        if self.center:
-            logger.info("Centering the data")
-            X = X - X.mean(dim=0, keepdim=True)
-
-        # Compute distance matrix
-        D = (
-            X
-            if (self.metric == "dot" and X.shape[0] == X.shape[1])
-            else self._compute_distance_matrix(X, weights)
-        )
-
-        # Initialize embedding
-        if init is None:
-            if self.verbose:
-                logger.info("Computing initial coordinates using classical MDS")
-            init = self._classical_mds(D)
-        else:
-            init = self._to_tensor(init)
-
-        if self.verbose:
-            logger.info("Beginning optimization")
-
-        # Optimize embedding
-        result = self._optimize_embedding(
-            D, init, weights, preopt_steps, gopt_steps, imix, grid_params, learning_rate
-        )
-
-        logger.info("Finished fit process")
-
-        # Return as numpy array for compatibility
-        return result.cpu().numpy()
 
     def _classical_mds(self, D: torch.Tensor) -> torch.Tensor:
         logger.info("Performing classical MDS")
         n = D.shape[0]
 
         # Create centering matrix H
-        H = (
-            torch.eye(n, device=self.device)
-            - torch.ones((n, n), device=self.device) / n
-        )
+        H = torch.eye(n, device=DEVICE) - torch.ones((n, n), device=DEVICE) / n
 
         # Double-center the squared distance matrix
         B = -0.5 * H @ (D**2) @ H
@@ -192,8 +109,7 @@ class DimRed:
         # Sort eigenvalues in descending order and select top k
         idx = torch.argsort(vals, descending=True)[: self.low_dim]
 
-        if self.verbose:
-            logger.info(f"Classical MDS eigenvalues: {vals[idx].cpu().numpy()}")
+        logger.info(f"Classical MDS eigenvalues: {vals[idx].cpu().numpy()}")
 
         # Return scaled eigenvectors
         return vecs[:, idx] * torch.sqrt(vals[idx])
@@ -202,20 +118,23 @@ class DimRed:
         self,
         Y: torch.Tensor,
         D: torch.Tensor,
-        weights: Optional[torch.Tensor],
-        imix: float,
+        weights: torch.Tensor,
+        imix: float = 0.0,
     ) -> torch.Tensor:
+        # compute pairwise distances in the lowdim space
         d = torch.cdist(Y, Y)
 
-        # Apply transformations
-        fD, dfD = self.tfun_hd(D)
-        fd, dfd = self.tfun_ld(d)
+        # apply transformations
+        fD, _dfD = self.tfun_hd(D)
+        fd, _dfd = self.tfun_ld(d)
 
-        # Calculate stress components
-        chi_id = torch.sum((D - d) ** 2)
-        chi_fun = torch.sum((fD - fd) ** 2)
+        # calculate stress components
+        chi_id = torch.sum(weights * (D - d) ** 2)
+        chi_fun = torch.sum(weights * (fD - fd) ** 2)
+        # chi_id = torch.sum((fD - d) ** 2)
+        # chi_fun = torch.sum((fD - fd) ** 2)
 
-        # Combine stresses
+        # combine stresses
         stress = imix * chi_id + (1 - imix) * chi_fun
 
         if self.verbose:
@@ -236,14 +155,13 @@ class DimRed:
         grid_params,
         learning_rate: float,
     ) -> torch.Tensor:
-        """Optimize the embedding using PyTorch's automatic differentiation."""
-        n = D.shape[0]
-
+        # init with the given starting points
         Y = init.clone().detach().requires_grad_(True)
 
+        # gradient-based optimization
         optimizer = torch.optim.Adam([Y], lr=learning_rate)
 
-        # Pre-optimization
+        # pre-optimization
         if preopt_steps > 0:
             logger.info(f"Running pre-optimization for {preopt_steps} steps")
 
@@ -262,19 +180,22 @@ class DimRed:
 
             logger.info("Pre-optimization completed")
 
-        # Global optimization (if requested)
+        # global optimization
         if gopt_steps > 0 and grid_params is not None:
             logger.info(f"Running global optimization for {gopt_steps} steps")
             grid_width, coarse_pts, fine_pts = grid_params
 
+            # LBFGS for global optimization
             optimizer = torch.optim.LBFGS([Y], lr=learning_rate)
 
+            # define closure for LBFGS
             def closure():
                 optimizer.zero_grad()
                 loss = self._stress_function(Y, D, weights, imix)
                 loss.backward()
                 return loss
 
+            # perform global optimization
             for step in range(gopt_steps):
                 optimizer.step(closure)
 
@@ -286,5 +207,51 @@ class DimRed:
 
             logger.info("Global optimization completed")
 
-        # Return the optimized embedding (detach to remove from computation graph)
         return Y.detach()
+
+    def fit(
+        self,
+        X: Union[np.ndarray, torch.Tensor],
+        weights: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        init: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        preopt_steps: int = 100,
+        gopt_steps: int = 0,
+        imix: float = 0.0,
+        grid_params=None,
+        learning_rate: float = 0.001,
+    ):
+        logger.info("Starting fit process")
+
+        X = self._to_tensor(X)
+        if weights is not None:
+            weights = self._to_tensor(weights)
+
+        if self.center:
+            logger.info("Centering the data")
+            X = X - X.mean(dim=0, keepdim=True)
+
+        # compute distance matrix
+        D = (
+            X
+            if (self.metric == "dot" and X.shape[0] == X.shape[1])
+            else self._compute_distance_matrix(X, weights)
+        )
+
+        # init lowdim embedding
+        if init is None:
+            if self.verbose:
+                logger.info("Computing initial coordinates using classical MDS")
+            init = self._classical_mds(D)
+        else:
+            init = self._to_tensor(init)
+
+        if self.verbose:
+            logger.info("Beginning optimization")
+
+        result = self._optimize_embedding(
+            D, init, weights, preopt_steps, gopt_steps, imix, grid_params, learning_rate
+        )
+
+        logger.info("Finished fit process")
+
+        return result.cpu().numpy()
