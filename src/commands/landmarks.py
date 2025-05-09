@@ -10,7 +10,7 @@ from src.utils.const import DEVICE
 def run_get_landmarks(
     points: torch.Tensor,
     weights: Optional[torch.Tensor] = None,
-    weighted: bool = False,
+    weighted: bool = True,
     num: int = 1000,
     mode: Literal["minmax"] = "minmax",
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
@@ -88,7 +88,7 @@ def _minmax_selection(
 
     if weighted:
         landmark_weights = _compute_voronoi_weights(
-            points, weights, landmarks, calculator, weight_gamma
+            points, weights, landmarks, weight_gamma
         )
     else:
         landmark_weights = torch.ones(num, device=DEVICE) / num
@@ -100,25 +100,16 @@ def _compute_voronoi_weights(
     points: torch.Tensor,
     weights: torch.Tensor,
     landmarks: torch.Tensor,
-    calculator: DistanceCalculator,
     weight_gamma: float = 1.0,
 ) -> torch.Tensor:
     n_landmarks = landmarks.shape[0]
 
-    # calculate distances from all points to all landmarks
-    distances = torch.stack(
-        [
-            torch.tensor(
-                [calculator.single_distance(p, l) for l in landmarks], device=DEVICE
-            )
-            for p in points
-        ]
-    )
+    dist_matrix = torch.cdist(points, landmarks, p=2)
 
     # find nearest landmark for each point
-    min_indices = torch.argmin(distances, dim=1)
+    min_indices = torch.argmin(dist_matrix, dim=1)
 
-    # vectorize weight accumulation
+    # accumulate weights to the nearest landmark
     landmark_weights = torch.zeros(n_landmarks, device=DEVICE)
     landmark_weights.scatter_add_(0, min_indices, weights)
 
@@ -126,10 +117,10 @@ def _compute_voronoi_weights(
         landmark_weights = landmark_weights.pow(weight_gamma)
 
     # normalize
-    weight_sum = landmark_weights.sum()
-    if weight_sum > 1e-10:
-        landmark_weights = landmark_weights / weight_sum
+    total_weight = landmark_weights.sum()
+    if total_weight > 1e-10:
+        landmark_weights /= total_weight
     else:
-        landmark_weights = torch.ones_like(landmark_weights) / n_landmarks
+        landmark_weights.fill_(1.0 / n_landmarks)
 
     return landmark_weights
