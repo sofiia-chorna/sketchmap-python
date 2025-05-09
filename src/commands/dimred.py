@@ -163,6 +163,8 @@ class DimRed:
         learning_rate: float,
         auto_grid: bool,
     ) -> torch.Tensor:
+        torch.manual_seed(42)
+
         device = D.device
         N, d = init.shape
         Y = init.clone().to(device).detach().requires_grad_(True)
