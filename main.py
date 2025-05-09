@@ -268,7 +268,7 @@ def select_landmarks(
     help="Dimensionality of input space",
 )
 @click.option(
-    "--low-dimension", "-d", type=int, default=2, help="Dimensionality of output space"
+    "--low-dimension", "-d", type=int, default=3, help="Dimensionality of output space"
 )
 @click.option(
     "--output",
@@ -285,26 +285,33 @@ def select_landmarks(
     help="Periodicity for PBC (0 for non-periodic)",
 )
 @click.option(
+    "--weighted/--no-weighted", default=False, help="Use weights from input file"
+)
+@click.option("--dot", is_flag=True, help="Use dot product distance")
+@click.option(
+    "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
+)
+@click.option(
+    "--gopt-steps", type=int, default=3.0, help="Number of global optimization steps"
+)
+@click.option(
+    "--imix", type=float, default=1.0, help="Mixing parameter for stress function"
+)
+@click.option(
     "--metric",
     type=click.Choice(["euclidean", "dot", "pbc"]),
     default="euclidean",
     help="Distance metric",
 )
-@click.option(
-    "--weighted/--no-weighted", default=True, help="Use weights from input file"
-)
-@click.option(
-    "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
-)
-@click.option(
-    "--gopt-steps", type=int, default=0, help="Number of global optimization steps"
-)
-@click.option(
-    "--imix", type=float, default=0.0, help="Mixing parameter for stress function"
-)
+@click.option("--sigma-hd", type=float, help="Sigma parameter for high-dim sigmoid")
+@click.option("--a-hd", type=int, help="'a' parameter for high-dim sigmoid")
+@click.option("--b-hd", type=int, help="'b' parameter for high-dim sigmoid")
+@click.option("--sigma-ld", type=float, help="Sigma parameter for low-dim sigmoid")
+@click.option("--a-ld", type=int, help="'a' parameter for low-dim sigmoid")
+@click.option("--b-ld", type=int, help="'b' parameter for low-dim sigmoid")
 @click.option("--grid-width", type=float, help="Grid width for global optimization")
-@click.option("--coarse-pts", type=int, help="Number of coarse grid points")
-@click.option("--fine-pts", type=int, help="Number of fine grid points")
+@click.option("--coarse-pts", type=int, default=21, help="Number of coarse grid points")
+@click.option("--fine-pts", type=int, default=201, help="Number of fine grid points")
 @click.option("--center/--no-center", default=True, help="Center the points")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 def dimred(
@@ -313,16 +320,23 @@ def dimred(
     low_dimension: int = 3,
     output_filepath: str = "low_landmarks.dat",
     period: float = 0.0,
-    metric: str = "euclidean",
-    weighted: bool = True,
+    weighted: bool = False,
+    dot: bool = False,
     preopt_steps: int = 100,
-    gopt_steps: int = 0,
-    imix: float = 0.0,
+    gopt_steps: int = 3,
+    imix: float = 1.0,
+    metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
+    sigma_hd: Optional[float] = None,
+    a_hd: Optional[int] = None,
+    b_hd: Optional[int] = None,
+    sigma_ld: Optional[float] = None,
+    a_ld: Optional[int] = None,
+    b_ld: Optional[int] = None,
     grid_width: Optional[float] = None,
-    coarse_pts: Optional[int] = None,
-    fine_pts: Optional[int] = None,
+    coarse_pts: int = 21,
+    fine_pts: int = 201,
     center: bool = True,
-    verbose: bool = False,
+    verbose: bool = True,
 ):
     click.echo("Running dimred with the following parameters:")
     click.echo(f"  highlandmarks_filepath: {highlandmarks_filepath}")
@@ -357,19 +371,18 @@ def dimred(
     if points.shape[1] != high_dimension:
         raise ValueError(f"Expected {high_dimension} dimensions, got {points.shape[1]}")
 
-    # params = auto_select_parameters(points, high_dimension, low_dimension)
-    params = {
-        "sigma_hd": 13.0,
-        "a_hd": 4,
-        "b_hd": 2,
-        "sigma_ld": 13.0,
-        "a_ld": 2,
-        "b_ld": 2,
-    }
+    metric = "dot" if dot else "euclidean"
+    if dot and (period != 0.0):
+        raise ValueError("Cannot use periodic options with dot product distance")
 
-    grid_params = None
-    if all(p is not None for p in [grid_width, coarse_pts, fine_pts]):
-        grid_params = (grid_width, coarse_pts, fine_pts)
+    if None in [sigma_hd, a_hd, b_hd, sigma_ld, a_ld, b_ld]:
+        logger.info("Auto-selecting sigmoid parameters")
+        sigma_hd = sigma_hd or 13.0
+        a_hd = a_hd or 4
+        b_hd = b_hd or 2
+        sigma_ld = sigma_ld or 13.0
+        a_ld = a_ld or 2
+        b_ld = b_ld or 2
 
     reducer = DimRed(
         high_dim=high_dimension,
@@ -378,36 +391,55 @@ def dimred(
         period=period,
         center=center,
         verbose=verbose,
+        grid_width=grid_width or 1.5,
+        coarse_points=coarse_pts,
+        fine_points=fine_pts,
     )
 
-    reducer.set_transformation(
-        "high", "sigmoid", (params["sigma_hd"], params["a_hd"], params["b_hd"])
-    )
-    reducer.set_transformation(
-        "low", "sigmoid", (params["sigma_ld"], params["a_ld"], params["b_ld"])
-    )
+    reducer.set_transformation("high", "sigmoid", (sigma_hd, a_hd, b_hd))
+    reducer.set_transformation("low", "sigmoid", (sigma_ld, a_ld, b_ld))
 
     try:
-        logger.info("Starting dimensionality reduction")
-        low_dim_points = reducer.fit(
+        logger.info("Running initial MDS")
+        init_points = reducer.fit(
             X=points,
             weights=weights,
             preopt_steps=preopt_steps,
             gopt_steps=gopt_steps,
             imix=imix,
-            grid_params=grid_params,
+            auto_grid=False,
         )
 
-        if weighted:
-            combined = np.hstack((low_dim_points, weights.reshape(-1, 1)))
-        else:
-            combined = np.hstack(
-                (low_dim_points, np.ones(len(low_dim_points)).reshape(-1, 1))
+        # iterative refinement
+        current_imix = imix if imix > 0 else 0.5  # start with 0.5 if not specified
+        for iteration in range(max(1, gopt_steps)):
+            logger.info(f"Iteration {iteration + 1}, imix={current_imix:.2f}")
+
+            low_dim_points = reducer.fit(
+                X=points,
+                weights=weights,
+                init=init_points,
+                preopt_steps=preopt_steps,
+                gopt_steps=1 if grid_width else 0,
+                imix=current_imix,
+                auto_grid=True,
             )
 
-        logger.info(f"Saving results to {output_filepath}")
-        np.savetxt(output_filepath, combined)
-        logger.info("Dimensionality reduction completed successfully")
+            # update imix adaptively
+            if iteration < gopt_steps - 1:
+                current_imix *= 0.8  # gradually reduce mixing parameter
+                current_imix = max(current_imix, 0.1)  # keep >= 0.1
+            init_points = low_dim_points
+
+        if weighted:
+            output_data = np.hstack((low_dim_points, weights.reshape(-1, 1)))
+        else:
+            output_data = np.hstack(
+                (low_dim_points, np.ones(len(low_dim_points)).reshape(-1, 1))
+            )
+        np.savetxt(output_filepath, output_data)
+
+        logger.info(f"Results saved to {output_filepath}")
 
     except Exception as e:
         logger.error(f"Error during dimensionality reduction: {e}")
