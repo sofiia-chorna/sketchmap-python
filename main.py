@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # from src.commands.dimred import DimRed, auto_select_parameters
+from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
 from src.commands.histogram import Histogram
 from src.commands.landmarks import run_get_landmarks
@@ -103,7 +104,6 @@ def plot_high_dim_landmarks(
     points_np = points.cpu().numpy()
     landmarks_np = landmarks.cpu().numpy()
 
-    # Fit PCA on original points
     pca = PCA(n_components=2)
     points_2d = pca.fit_transform(points_np)
     landmarks_2d = pca.transform(landmarks_np)
@@ -125,7 +125,7 @@ def plot_high_dim_landmarks(
 def verify_landmarks(
     points: torch.Tensor, landmarks: torch.Tensor, calculator: DistanceCalculator
 ):
-    # 1. Verify distances from all points to landmarks
+    # 1. verify distances from all points to landmarks
     point_to_landmark_dists = calculator.pairwise_distances(points, landmarks)
     min_dists = point_to_landmark_dists.min(dim=1).values
 
@@ -137,10 +137,10 @@ def verify_landmarks(
         / point_to_landmark_dists.max().item(),
     }
 
-    # 2. Verify distances between landmarks
+    # 2. verify distances between landmarks
     landmark_dists = calculator.pairwise_distances(landmarks)
 
-    # Fill diagonal with infinity to ignore self-distances
+    # fill diagonal with infinity to ignore self-distances
     landmark_dists.fill_diagonal_(float("inf"))
 
     min_landmark_dists = landmark_dists.min(dim=1).values
@@ -152,7 +152,7 @@ def verify_landmarks(
         / landmark_dists.max().item(),
     }
 
-    # 3. Check for duplicates or near-duplicates
+    # 3. check for duplicates or near-duplicates
     duplicate_threshold = 1e-6
     num_too_close = (landmark_dists < duplicate_threshold).sum().item() // 2
     if num_too_close > 0:
@@ -164,7 +164,6 @@ def verify_landmarks(
         else:
             print(f"Warning: {warning}")
 
-    # Print results
     print("\nLandmark Coverage Statistics:")
     for k, v in coverage_stats.items():
         print(f"{k:>25}: {v:.6f}")
@@ -245,27 +244,11 @@ def select_landmarks(
     logger.info(f"Saving landmarks to {output_filepath}")
     np.savetxt(output_filepath, combined.cpu().numpy())
 
-    # landmarks, weights = load_landmarks("highd-landmarks", True)
     calculator = DistanceCalculator(metric)
     verify_landmarks(points, landmarks, calculator)
 
     plot_high_dim_landmarks(points, landmarks)
     logger.info("Finished landmark selection")
-
-
-def load_landmarks(
-    filepath: str, weighted: bool = False
-) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """Load landmarks from file, handling both weighted and unweighted cases"""
-    data = np.loadtxt(filepath)
-    if weighted:
-
-        landmarks = torch.tensor(data[:, :-1], dtype=torch.float32, device=DEVICE)
-        weights = torch.tensor(data[:, -1], dtype=torch.float32, device=DEVICE)
-    else:
-        landmarks = torch.tensor(data, dtype=torch.float32, device=DEVICE)
-        weights = None
-    return landmarks, weights
 
 
 @main.command()
@@ -306,7 +289,7 @@ def load_landmarks(
     help="Distance metric",
 )
 @click.option(
-    "--weighted/--no-weighted", default=False, help="Use weights from input file"
+    "--weighted/--no-weighted", default=True, help="Use weights from input file"
 )
 @click.option(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
@@ -329,7 +312,7 @@ def dimred(
     output_filepath: str = "low_landmarks.dat",
     period: float = 0.0,
     metric: str = "euclidean",
-    weighted: bool = False,
+    weighted: bool = True,
     preopt_steps: int = 100,
     gopt_steps: int = 0,
     imix: float = 0.0,
@@ -362,6 +345,14 @@ def dimred(
         raise click.Abort()
 
     # params = auto_select_parameters(points, high_dimension, low_dimension)
+    params = {
+        "sigma_hd": 7.0,
+        "a_hd": 4,
+        "b_hd": 2,
+        "sigma_ld": 7.0,
+        "a_ld": 2,
+        "b_ld": 2,
+    }
 
     # set up grid parameters if provided => for now not available
     grid_params = None
