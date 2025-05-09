@@ -2,8 +2,11 @@ from typing import Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from src.utils.logger import logger
+
+from tqdm import tqdm
+
 from src.utils.const import DEVICE
+from src.utils.logger import logger
 
 
 class DimRed:
@@ -15,6 +18,9 @@ class DimRed:
         period: float = 0.0,
         center: bool = True,
         verbose: bool = False,
+        grid_width: float = 1.5,
+        coarse_points: int = 21,
+        fine_points: int = 201,
     ):
         self.high_dim = high_dim
         self.low_dim = low_dim
@@ -22,6 +28,10 @@ class DimRed:
         self.period = period
         self.center = center
         self.verbose = verbose
+
+        self.grid_width = grid_width
+        self.coarse_points = coarse_points
+        self.fine_points = fine_points
 
         self.tfun_hd = self._identity_function
         self.tfun_ld = self._identity_function
@@ -152,8 +162,8 @@ class DimRed:
         preopt_steps: int,
         gopt_steps: int,
         imix: float,
-        grid_params,
         learning_rate: float,
+        auto_grid: bool,
     ) -> torch.Tensor:
         # init with the given starting points
         Y = init.clone().detach().requires_grad_(True)
@@ -165,7 +175,7 @@ class DimRed:
         if preopt_steps > 0:
             logger.info(f"Running pre-optimization for {preopt_steps} steps")
 
-            for step in range(preopt_steps):
+            for step in tqdm(range(preopt_steps), desc="Preopt step"):
                 optimizer.zero_grad()
 
                 loss = self._stress_function(Y, D, weights, imix)
@@ -181,11 +191,65 @@ class DimRed:
             logger.info("Pre-optimization completed")
 
         # global optimization
-        if gopt_steps > 0 and grid_params is not None:
-            logger.info(f"Running global optimization for {gopt_steps} steps")
-            grid_width, coarse_pts, fine_pts = grid_params
+        if gopt_steps > 0:
+            if auto_grid:
+                with torch.no_grad():
+                    current_radius = torch.max(torch.norm(Y, dim=1)).item()
+                    grid_width = current_radius * 1.2  # 20% buffer
+            else:
+                grid_width = self.grid_width
 
-            # LBFGS for global optimization
+            logger.info(
+                f"Starting global optimization with grid width={grid_width:.2f}, "
+                f"coarse={self.coarse_points}, fine={self.fine_points}"
+            )
+
+            # point-wise grid optimization
+            for point_idx in tqdm(
+                range(Y.shape[0]), desc="Point-wise grid optimization"
+            ):
+                # create grid around current point
+                coarse_grid = torch.linspace(
+                    -grid_width, grid_width, self.coarse_points
+                )
+                fine_grid = torch.linspace(-grid_width, grid_width, self.fine_points)
+
+                # optimize each dimension separately
+                for dim in tqdm(range(self.low_dim)):
+                    best_val = Y[point_idx, dim].item()
+                    best_loss = float("inf")
+
+                    # coarse search
+                    for val in coarse_grid:
+                        with torch.no_grad():
+                            Y[point_idx, dim] = val
+                        current_loss = self._stress_function(Y, D, weights, imix).item()
+                        if current_loss < best_loss:
+                            best_loss = current_loss
+                            best_val = val
+
+                    # fine search around best coarse value
+                    fine_start = max(
+                        best_val - grid_width / self.coarse_points, -grid_width
+                    )
+                    fine_end = min(
+                        best_val + grid_width / self.coarse_points, grid_width
+                    )
+                    fine_vals = torch.linspace(fine_start, fine_end, self.fine_points)
+
+                    for val in fine_vals:
+                        with torch.no_grad():
+                            Y[point_idx, dim] = val
+                        current_loss = self._stress_function(Y, D, weights, imix).item()
+                        if current_loss < best_loss:
+                            best_loss = current_loss
+                            best_val = val
+
+                    # set to best found value
+                    with torch.no_grad():
+                        Y[point_idx, dim] = best_val
+
+            # final LBFGS optimization
             optimizer = torch.optim.LBFGS([Y], lr=learning_rate)
 
             # define closure for LBFGS
@@ -198,14 +262,10 @@ class DimRed:
             # perform global optimization
             for step in range(gopt_steps):
                 optimizer.step(closure)
-
                 if self.verbose and (step + 1) % 10 == 0:
-                    loss = self._stress_function(Y, D, weights, imix)
                     logger.info(
-                        f"Global opt step {step + 1}/{gopt_steps}, Loss: {loss.item():.6f}"
+                        f"Global opt step {step + 1}/{gopt_steps}, Loss: {closure().item():.6f}"
                     )
-
-            logger.info("Global optimization completed")
 
         return Y.detach()
 
@@ -217,8 +277,8 @@ class DimRed:
         preopt_steps: int = 100,
         gopt_steps: int = 0,
         imix: float = 0.0,
-        grid_params=None,
         learning_rate: float = 0.001,
+        auto_grid: bool = True,
     ):
         logger.info("Starting fit process")
 
@@ -249,7 +309,7 @@ class DimRed:
             logger.info("Beginning optimization")
 
         result = self._optimize_embedding(
-            D, init, weights, preopt_steps, gopt_steps, imix, grid_params, learning_rate
+            D, init, weights, preopt_steps, gopt_steps, imix, learning_rate, auto_grid
         )
 
         logger.info("Finished fit process")
