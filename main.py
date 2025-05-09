@@ -197,6 +197,7 @@ def select_landmarks(
     weighted: bool = True,
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
 ):
+    weighted = True
     logger.info("Start running 'select-landmarks'")
     logger.info(f"Params: num={num}, select_mode={select_mode}, weighted={weighted}")
 
@@ -221,6 +222,7 @@ def select_landmarks(
         num=num,
         mode=select_mode,
         metric=metric,
+        weighted=weighted,
         # period=period,
         # sphere_period=sphere_period,
         #  first_index=args.first_index,
@@ -308,7 +310,7 @@ def select_landmarks(
 def dimred(
     highlandmarks_filepath: str,
     high_dimension: int,
-    low_dimension: int = 2,
+    low_dimension: int = 3,
     output_filepath: str = "low_landmarks.dat",
     period: float = 0.0,
     metric: str = "euclidean",
@@ -322,39 +324,49 @@ def dimred(
     center: bool = True,
     verbose: bool = False,
 ):
-    try:
-        data = np.loadtxt(highlandmarks_filepath)
+    click.echo("Running dimred with the following parameters:")
+    click.echo(f"  highlandmarks_filepath: {highlandmarks_filepath}")
+    click.echo(f"  high_dimension: {high_dimension}")
+    click.echo(f"  low_dimension: {low_dimension}")
+    click.echo(f"  output_filepath: {output_filepath}")
+    click.echo(f"  period: {period}")
+    click.echo(f"  metric: {metric}")
+    click.echo(f"  weighted: {weighted}")
+    click.echo(f"  preopt_steps: {preopt_steps}")
+    click.echo(f"  gopt_steps: {gopt_steps}")
+    click.echo(f"  imix: {imix}")
+    click.echo(f"  grid_width: {grid_width}")
+    click.echo(f"  coarse_pts: {coarse_pts}")
+    click.echo(f"  fine_pts: {fine_pts}")
+    click.echo(f"  center: {center}")
+    click.echo(f"  verbose: {verbose}")
 
-        if np.any(np.isinf(data)) or np.any(np.isnan(data)):
-            logger.warning("Input contains inf/NaN values - cleaning data")
-            data = np.nan_to_num(data)
+    data = np.loadtxt(highlandmarks_filepath)
 
-        if weighted:
-            points = data[:, :-1]
-            weights = data[:, -1]
-        else:
-            points = data
-            weights = None
+    if np.any(np.isinf(data)) or np.any(np.isnan(data)):
+        logger.warning("Input contains inf/NaN values - cleaning data")
+        data = np.nan_to_num(data)
 
-        if points.shape[1] != high_dimension:
-            raise ValueError(
-                f"Expected {high_dimension} dimensions, got {points.shape[1]}"
-            )
-    except Exception as e:
-        logger.error(f"Error reading input file: {e}")
-        raise click.Abort()
+    if weighted:
+        points = data[:, :-1]
+        weights = data[:, -1]
+    else:
+        points = data
+        weights = None
+
+    if points.shape[1] != high_dimension:
+        raise ValueError(f"Expected {high_dimension} dimensions, got {points.shape[1]}")
 
     # params = auto_select_parameters(points, high_dimension, low_dimension)
     params = {
-        "sigma_hd": 7.0,
+        "sigma_hd": 13.0,
         "a_hd": 4,
         "b_hd": 2,
-        "sigma_ld": 7.0,
+        "sigma_ld": 13.0,
         "a_ld": 2,
         "b_ld": 2,
     }
 
-    # set up grid parameters if provided => for now not available
     grid_params = None
     if all(p is not None for p in [grid_width, coarse_pts, fine_pts]):
         grid_params = (grid_width, coarse_pts, fine_pts)
