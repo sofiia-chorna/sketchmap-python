@@ -107,21 +107,19 @@ class DimRed:
         logger.info("Performing classical MDS")
         n = D.shape[0]
 
-        # Create centering matrix H
+        # create centering matrix H
         H = torch.eye(n, device=DEVICE) - torch.ones((n, n), device=DEVICE) / n
 
-        # Double-center the squared distance matrix
+        # double-center the squared distance matrix
         B = -0.5 * H @ (D**2) @ H
 
-        # Eigendecomposition
+        # eigendecomposition
         vals, vecs = torch.linalg.eigh(B)
-
-        # Sort eigenvalues in descending order and select top k
         idx = torch.argsort(vals, descending=True)[: self.low_dim]
 
         logger.info(f"Classical MDS eigenvalues: {vals[idx].cpu().numpy()}")
 
-        # Return scaled eigenvectors
+        # scaled eigenvectors
         return vecs[:, idx] * torch.sqrt(vals[idx])
 
     def _stress_function(
@@ -165,8 +163,9 @@ class DimRed:
         learning_rate: float,
         auto_grid: bool,
     ) -> torch.Tensor:
+        device = D.device
         N, d = init.shape
-        Y = init.clone().to(DEVICE).detach().requires_grad_(True)
+        Y = init.clone().to(device).detach().requires_grad_(True)
 
         # ======= Step 1: Local Optimization with LBFGS =======
         if preopt_steps > 0:
@@ -182,13 +181,13 @@ class DimRed:
 
         Y = Y.detach().requires_grad_(False)  # clean up grads after local step
 
-        # ======= Step 2: Global Optimization with Grid Search =======
+        # ======= Step 2: Global Optimization with Adaptive Grid Search =======
         if gopt_steps > 0:
-            eye_d = torch.eye(d, device=DEVICE)
+            eye_d = torch.eye(d, device=device)
             last_loss = float("inf")
             stagnation_counter = 0
 
-            # Auto-set base width for grid search
+            # auto-set base width for grid search
             with torch.no_grad():
                 current_radius = torch.max(torch.norm(Y, dim=1)).item()
                 base_width = current_radius * 1.2 if auto_grid else self.grid_width
@@ -211,19 +210,32 @@ class DimRed:
                             for i in range(N)
                         ]
                     )
-                    k = min(100, N)
-                    process_points = torch.topk(point_errors, k=k).indices
+                    HIGH_ERROR_PARAM = 0.7
+                    threshold = (
+                        point_errors.mean() + HIGH_ERROR_PARAM * point_errors.std()
+                    )
+                    process_points = (point_errors > threshold).nonzero(as_tuple=True)[
+                        0
+                    ]
+
+                    if len(process_points) < 10:
+                        k = max(int(0.2 * N), 1)
+                        process_points = torch.topk(point_errors, k=k).indices
+
+                    logger.info(
+                        f"{k} points have error bigger than threshold (mean + 0.5 * std error). Optimising them"
+                    )
 
                 updated = False
 
-                for point_idx in tqdm(process_points, desc="Processing points"):
+                for point_idx in process_points:
                     point_idx = int(point_idx)
                     original_point = Y[point_idx].clone()
 
                     for dim in range(d):
-                        # Coarse grid search
+                        # adaptive coarse grid search with variable density
                         coarse_vals = torch.linspace(
-                            -grid_width, grid_width, 5, device=DEVICE
+                            -grid_width, grid_width, 5, device=device
                         )
                         offsets = coarse_vals.view(-1, 1) * eye_d[dim : dim + 1]
                         test_Y = Y.unsqueeze(0).expand(5, -1, -1).clone()
@@ -240,15 +252,15 @@ class DimRed:
                         best_idx = torch.argmin(losses)
                         best_offset = coarse_vals[best_idx]
 
-                        # Fine grid around the best coarse point
+                        # refined fine grid around the best coarse point
                         fine_vals = torch.linspace(
                             max(best_offset - grid_width / 10, -grid_width),
                             min(best_offset + grid_width / 10, grid_width),
-                            11,
-                            device=DEVICE,
+                            15,
+                            device=device,
                         )
                         offsets = fine_vals.view(-1, 1) * eye_d[dim : dim + 1]
-                        test_Y = Y.unsqueeze(0).expand(11, -1, -1).clone()
+                        test_Y = Y.unsqueeze(0).expand(15, -1, -1).clone()
                         test_Y[:, point_idx] = original_point + offsets
 
                         with torch.no_grad():
@@ -266,7 +278,7 @@ class DimRed:
                             Y[point_idx] = new_point
                             updated = True
 
-                # Final LBFGS polishing step (optional, or after last update)
+                # final LBFGS polishing step
                 if global_step == gopt_steps - 1 or (not updated):
                     Y = Y.detach().requires_grad_(True)
                     optimizer = torch.optim.LBFGS(
@@ -325,14 +337,12 @@ class DimRed:
 
         # init lowdim embedding
         if init is None:
-            if self.verbose:
-                logger.info("Computing initial coordinates using classical MDS")
+            logger.info("Computing initial coordinates using classical MDS")
             init = self._classical_mds(D)
         else:
             init = self._to_tensor(init)
 
-        if self.verbose:
-            logger.info("Beginning optimization")
+        logger.info("Beginning optimization")
 
         result = self._optimize_embedding(
             D, init, weights, preopt_steps, gopt_steps, imix, learning_rate, auto_grid
