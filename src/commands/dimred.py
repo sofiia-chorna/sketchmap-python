@@ -167,6 +167,9 @@ class DimRed:
         N, d = init.shape
         Y = init.clone().to(device).detach().requires_grad_(True)
 
+        if weights is None:
+            weights = torch.ones(N, device=device)
+
         if self.verbose:
             print("\n=== Starting Optimization ===")
             print(f"Points: {N}, Dimensions: {d}")
