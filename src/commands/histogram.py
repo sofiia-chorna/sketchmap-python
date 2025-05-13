@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 
 
@@ -14,6 +15,11 @@ class Histogram:
         values: tuple[np.ndarray, np.ndarray],
         weights: tuple[np.ndarray, np.ndarray],
     ):
+        if torch.is_tensor(values):
+            values = values.detach().cpu().numpy()
+        if torch.is_tensor(weights):
+            weights = weights.detach().cpu().numpy()
+
         valid_mask = (values >= self.boundaries[0]) & (values < self.boundaries[-1])
         self.below += np.sum(weights[values < self.boundaries[0]])
         self.above += np.sum(weights[values >= self.boundaries[-1]])
