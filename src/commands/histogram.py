@@ -1,5 +1,8 @@
-import torch
+import csv
+
+import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 
 class Histogram:
@@ -35,7 +38,7 @@ class Histogram:
     def get_outliers(self):
         return self.above / self.ndata, self.below / self.ndata
 
-    def get_results(self):
+    def get_results(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         first_bin = self.boundaries[1:]
         last_bin = self.boundaries[:-1]
 
@@ -44,3 +47,36 @@ class Histogram:
         widths = first_bin - last_bin
 
         return centers, prob_density_func, widths
+
+    def save_csv(
+        self,
+        results: tuple[np.ndarray, np.ndarray, np.ndarray],
+        filepath: str = "analyse.csv",
+    ):
+        centers, pdf, widths = results
+
+        with open(filepath, "w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(["center", "pdf", "width"])
+
+            for c, p, w in zip(centers, pdf, widths):
+                writer.writerow([f"{c:.6e}", f"{p:.6e}", f"{w:.6e}"])
+
+    def save_plot(
+        self,
+        results: tuple[np.ndarray, np.ndarray, np.ndarray],
+        filepath: str = "plot.png",
+    ):
+        distances, histogram_values, _ = results
+
+        plt.plot(distances, histogram_values, color="red", label="original")
+
+        plt.xlabel("distance")
+        plt.ylabel("prob density")
+        plt.legend()
+        plt.grid()
+        plt.xlim(0, 20)
+
+        plt.tight_layout()
+
+        plt.savefig(filepath, dpi=300)

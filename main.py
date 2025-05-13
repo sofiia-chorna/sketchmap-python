@@ -1,7 +1,4 @@
-import csv
-import os
 from typing import Literal, Optional
-from datetime import datetime
 
 import click
 import matplotlib.pyplot as plt
@@ -30,8 +27,7 @@ from src.utils.cli import (
 )
 from src.utils.const import DEVICE
 from src.utils.file import read_file
-from src.utils.logger import logger, get_id
-from src.utils.plot import get_analyze_plot
+from src.utils.logger import get_id, logger
 
 
 @click.group()
@@ -57,21 +53,12 @@ def analyse(
     max_distance: int,
     n_bin: int,
     high_dimension: Optional[int] = None,
-    output_filepath: Optional[str] = "analyse_result.csv",
+    output_filepath: Optional[str] = None,
     weighted: bool = False,
 ):
     logger.info("Start running 'analyze'")
-    params = {
-        "hdim_filepath": hdim_filepath,
-        "metric": metric,
-        "period": period,
-        "sphere_period": sphere_period,
-        "max_distance": max_distance,
-        "n_bin": n_bin,
-        "high_dimension": high_dimension,
-        "output_filepath": output_filepath,
-        "weighted": weighted,
-    }
+
+    params = locals()
     logger.info(f"Parameters: {params}")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
@@ -93,27 +80,19 @@ def analyse(
     hist = Histogram(bins)
     hist.add_values(distances, dweights)
 
-    logger.info(f"Start calculating outliers")
-    out_above, out_below = hist.get_outliers()
-    logger.info(f"Fraction outside: {out_above:.6f} {out_below:.6f}")
+    results = hist.get_results()
 
     id = get_id()
+    output_filepath = output_filepath or f"analyse_{id}.csv"
     plot_filepath = f"analyse_{id}.png"
 
-    if output_filepath is None:
-        output_filepath = f"analyse_{id}.csv"
+    logger.info(f"Saving histogram to {output_filepath} and plot to {plot_filepath}")
+    hist.save_csv(results, output_filepath)
+    hist.save_plot(results, plot_filepath)
 
-    logger.info(f"Writing results to {output_filepath}")
-    centers, prob_density_func, widths = hist.get_results()
-
-    with open(output_filepath, "w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["center", "pdf", "width"])
-        for center, pdf_val, width in zip(centers, prob_density_func, widths):
-            writer.writerow([f"{center:.6e}", f"{pdf_val:.6e}", f"{width:.6e}"])
-
-    logger.info(f"Start saving histogram to {plot_filepath}")
-    get_analyze_plot(output_filepath, plot_filepath)
+    logger.info(f"Start calculating outliers")
+    out_above, out_below = hist.get_outliers()
+    logger.info(f"Outliers — above: {out_above:.6f}, below: {out_below:.6f}")
 
     logger.info("End running 'analyze'")
 
