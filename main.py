@@ -1,15 +1,13 @@
 import csv
 import os
-from typing import Optional, Literal
+from typing import Literal, Optional
+from datetime import datetime
 
 import click
-import numpy as np
-import torch
-
-from sklearn.decomposition import PCA
-
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+from sklearn.decomposition import PCA
 
 # from src.commands.dimred import DimRed, auto_select_parameters
 from src.commands.dimred import DimRed
@@ -21,16 +19,19 @@ from src.utils.cli import (
     high_dimension,
     low_dimension,
     max_distance,
+    metric,
     n_bin,
     num,
     output_filepath,
+    period,
     select_mode,
+    sphere_period,
     weighted,
 )
-from src.utils.file import read_file
-from src.utils.logger import logger
-from src.utils.plot import get_analyze_plot
 from src.utils.const import DEVICE
+from src.utils.file import read_file
+from src.utils.logger import logger, get_id
+from src.utils.plot import get_analyze_plot
 
 
 @click.group()
@@ -40,6 +41,9 @@ def main():
 
 @main.command()
 @hdim_filepath
+@metric
+@period
+@sphere_period
 @max_distance
 @n_bin
 @high_dimension
@@ -47,13 +51,28 @@ def main():
 @weighted
 def analyse(
     hdim_filepath: str,
+    metric: str,
+    period: float,
+    sphere_period: float,
     max_distance: int,
     n_bin: int,
     high_dimension: Optional[int] = None,
-    output_filepath: str = "analyse_result.csv",
+    output_filepath: Optional[str] = "analyse_result.csv",
     weighted: bool = False,
 ):
     logger.info("Start running 'analyze'")
+    params = {
+        "hdim_filepath": hdim_filepath,
+        "metric": metric,
+        "period": period,
+        "sphere_period": sphere_period,
+        "max_distance": max_distance,
+        "n_bin": n_bin,
+        "high_dimension": high_dimension,
+        "output_filepath": output_filepath,
+        "weighted": weighted,
+    }
+    logger.info(f"Parameters: {params}")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
     points, weights = read_file(hdim_filepath, high_dimension, weighted)
@@ -61,8 +80,7 @@ def analyse(
 
     logger.info(f"Start computing distances")
 
-    # TODO: add param to select metric
-    distance_calculator = DistanceCalculator("euclidean")
+    distance_calculator = DistanceCalculator(metric, period, sphere_period)
 
     distances, dweights = distance_calculator.pairwise_distances(
         points, weights, weighted
@@ -79,6 +97,12 @@ def analyse(
     out_above, out_below = hist.get_outliers()
     logger.info(f"Fraction outside: {out_above:.6f} {out_below:.6f}")
 
+    id = get_id()
+    plot_filepath = f"analyse_{id}.png"
+
+    if output_filepath is None:
+        output_filepath = f"analyse_{id}.csv"
+
     logger.info(f"Writing results to {output_filepath}")
     centers, prob_density_func, widths = hist.get_results()
 
@@ -88,10 +112,8 @@ def analyse(
         for center, pdf_val, width in zip(centers, prob_density_func, widths):
             writer.writerow([f"{center:.6e}", f"{pdf_val:.6e}", f"{width:.6e}"])
 
-    os.makedirs("results", exist_ok=True)
-    histo_plot_path = os.path.join("results")
-    logger.info(f"Start saving histogram to {histo_plot_path}")
-    get_analyze_plot(output_filepath, histo_plot_path)
+    logger.info(f"Start saving histogram to {plot_filepath}")
+    get_analyze_plot(output_filepath, plot_filepath)
 
     logger.info("End running 'analyze'")
 
@@ -188,6 +210,14 @@ def verify_landmarks(
     default="euclidean",
     help="Distance metric",
 )
+@click.option(
+    "--save-indices",
+    "--i",
+    type=bool,
+    is_flag=True,
+    default=False,
+    help="Should indices of the selected landmarks be saved as a first column",
+)
 def select_landmarks(
     hdim_filepath: str,
     num: int = 1000,
@@ -196,6 +226,7 @@ def select_landmarks(
     output_filepath: str = "high_landmarks.dat",
     weighted: bool = True,
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
+    save_indices: bool = False,
 ):
     weighted = True
     logger.info("Start running 'select-landmarks'")
@@ -242,6 +273,10 @@ def select_landmarks(
         )
 
     combined = torch.cat([landmarks, weights], dim=-1)
+
+    if save_indices:
+        indices = indices.unsqueeze(-1).float()  # shape: (num, 1)
+        combined = torch.cat([indices, combined], dim=-1)  # shape: (num, D+2)
 
     logger.info(f"Saving landmarks to {output_filepath}")
     np.savetxt(output_filepath, combined.cpu().numpy())

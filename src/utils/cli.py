@@ -85,3 +85,30 @@ def select_mode(func):
         type=click.Choice(["minmax", "random"], case_sensitive=False),
         default="minmax",
     )(func)
+
+
+def metric(func):
+    return click.option(
+        "--metric",
+        type=click.Choice(["euclidean", "dot", "pbc"]),
+        default="euclidean",
+        help="Distance metric",
+    )(func)
+
+
+def period(func):
+    return click.option(
+        "--period",
+        type=float,
+        default=0.0,
+        help="Required for metric 'pbc'. Defines the lenght of the periodic box",
+    )(func)
+
+
+def sphere_period(func):
+    return click.option(
+        "--sphere_period",
+        type=float,
+        default=0.0,
+        help="Required for metric 'sphere' (sperical distances). Defines the circumference of the sphere",
+    )(func)
