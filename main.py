@@ -9,7 +9,7 @@ from sklearn.decomposition import PCA
 # from src.commands.dimred import DimRed, auto_select_parameters
 from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
-from src.commands.histogram import Histogram
+from src.commands.histogram import DistanceHistogram
 from src.commands.landmarks import run_get_landmarks
 from src.utils.cli import (
     hdim_filepath,
@@ -77,10 +77,10 @@ def analyse(
     logger.info(f"Start creating histogram")
     max_distance = max_distance if max_distance is not None else np.max(distances)
     bins = np.linspace(0, max_distance, n_bin + 1)
-    hist = Histogram(bins)
-    hist.add_values(distances, dweights)
+    hist = DistanceHistogram(bins)
+    hist.add_data_points(distances, dweights)
 
-    results = hist.get_results()
+    results = hist.get_histogram_data()
 
     id = get_id()
     output_filepath = output_filepath or f"analyse_{id}.csv"
