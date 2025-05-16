@@ -23,7 +23,6 @@ def max_distance(func):
     return click.option(
         "--max_distance",
         "--maxd",
-        default=100,
         help="Maximum distance to consider in pairwise distance calculations",
         type=int,
     )(func)
@@ -32,7 +31,7 @@ def max_distance(func):
 def n_bin(func):
     return click.option(
         "--n_bin",
-        default=1000,
+        default=150,
         help="Number of bins to use in the histogram",
         type=int,
     )(func)
