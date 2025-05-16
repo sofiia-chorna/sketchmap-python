@@ -117,6 +117,7 @@ class DistanceHistogram:
 
     def plot_analysis(
         self,
+        input_path: str,
         show: bool = True,
         save_path: Optional[str] = None,
         params: Optional[dict] = {},
@@ -164,7 +165,7 @@ class DistanceHistogram:
 
         ax.set_xlabel("distance")
         ax.set_ylabel("prob density")
-        ax.set_title("High-dim distance distribution analysis")
+        ax.set_title(f"High-dim distance distribution analysis for {input_path}")
         ax.legend()
         ax.grid(True)
 
@@ -175,10 +176,12 @@ class DistanceHistogram:
 
         return fig
 
-    def save_analysis_report(self, filepath: str, params: dict) -> None:
+    def save_analysis_report(self, filepath: str, params: dict, input_path: str) -> None:
         with open(filepath, "w") as f:
             f.write("High-dimentional distance distribution analysis report\n")
             f.write("=" * 60 + "\n\n")
+            
+            f.write(f"File: {input_path}\n\n")
 
             f.write(f"- Peak distance: {self.peak_distance:.4f}\n")
             if self.gaussian_std is not None:

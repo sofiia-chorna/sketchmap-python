@@ -87,8 +87,8 @@ def analyse(
     output_filepath = output_filepath or f"analysis_report_{id}.txt"
     plot_filepath = f"distance_analysis_{id}.png"
 
-    analyzer.plot_analysis(save_path=plot_filepath, params=params)
-    analyzer.save_analysis_report(output_filepath, params=params)
+    analyzer.plot_analysis(save_path=plot_filepath, params=params, input_path=hdim_filepath)
+    analyzer.save_analysis_report(output_filepath, params=params, input_path=hdim_filepath)
 
     logger.info(f"Saving histogram to {output_filepath} and plot to {plot_filepath}")
 
