@@ -42,8 +42,8 @@ def main():
 @metric
 @period
 @sphere_period
-@max_distance
 @n_bin
+@max_distance
 @high_dimension
 @output_filepath
 @weighted
@@ -52,8 +52,8 @@ def analyse(
     metric: str,
     period: float,
     sphere_period: float,
-    max_distance: int,
     n_bin: int,
+    max_distance: Optional[int] = None,
     high_dimension: Optional[int] = None,
     output_filepath: Optional[str] = None,
     weighted: bool = False,
@@ -87,8 +87,8 @@ def analyse(
     output_filepath = output_filepath or f"analysis_report_{id}.txt"
     plot_filepath = f"distance_analysis_{id}.png"
 
-    analyzer.plot_analysis(save_path=plot_filepath)
-    analyzer.save_analysis_report(output_filepath, dimensionality=1024)
+    analyzer.plot_analysis(save_path=plot_filepath, params=params)
+    analyzer.save_analysis_report(output_filepath, params=params)
 
     logger.info(f"Saving histogram to {output_filepath} and plot to {plot_filepath}")
 

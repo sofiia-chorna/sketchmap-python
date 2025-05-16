@@ -1,12 +1,14 @@
-from typing import Optional, Tuple
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
 
+from src.utils.logger import logger
+
 
 class DistanceHistogram:
-    def __init__(self, n_bins: int = 100, max_distance: Optional[float] = 0.0):
+    def __init__(self, n_bins: int = 100, max_distance: Optional[float] = None):
         self.n_bins = n_bins
         self.max_distance = max_distance
 
@@ -19,18 +21,20 @@ class DistanceHistogram:
     def analyze_distance(self, distances: np.ndarray):
         if self.max_distance is None:
             self.max_distance = np.percentile(distances, 99.9)
+            logger.info(f"Auto-set max_distance to {self.max_distance:.2f}")
 
         # create histogram
         self.bin_edges = np.linspace(0, self.max_distance, self.n_bins + 1)
         bin_counts, _ = np.histogram(distances, bins=self.bin_edges, density=True)
-        
+
         self.prob_density = bin_counts
 
         right_edges = self.bin_edges[1:]
-        left_edges = self.bin_edges[1:]
+        left_edges = self.bin_edges[:-1]
         self.bin_centers = 0.5 * (left_edges + right_edges)
 
-        self.peak_distance = self.bin_centers[np.argmax(bin_counts)]
+        peak_id = np.argmax(bin_counts)
+        self.peak_distance = self.bin_centers[peak_id]
 
         # estimate gaussian shape (on left side from peak)
         left_mask = self.bin_centers < self.peak_distance
@@ -80,6 +84,10 @@ class DistanceHistogram:
                 self.uniform_cuttoff
                 * 0.9,  # upper bound: 90% of right tail cuttof distance
             )
+        else:
+            logger.warning(
+                f"Range is not correct: gaussian_std: {self.gaussian_std}, uniform_cuttoff: {self.uniform_cuttoff}"
+            )
 
         # dimention-based parameter scaling
         if dim > 1000:
@@ -105,22 +113,26 @@ class DistanceHistogram:
                 {"a_high": min(12, 6 + dim // 10), "b_high": min(12, 8 + dim // 10)}
             )
 
+        return params
+
     def plot_analysis(
         self,
         show: bool = True,
         save_path: Optional[str] = None,
-        figsize: Tuple[float, float] = (10, 6),
+        params: Optional[dict] = {},
     ) -> plt.Figure:
-        fig, ax = plt.subplots(figsize=figsize)
+        fig, ax = plt.subplots(figsize=(10, 6))
 
-        ax.plot(self.bin_centers, self.prob_density, "b-", label="distance distrib")
+        ax.plot(
+            self.bin_centers, self.prob_density, "b-", label="distance distribution"
+        )
 
         if self.peak_distance is not None:
             ax.axvline(
                 self.peak_distance,
                 color="r",
                 linestyle="--",
-                label=f"Peak distance: {self.peak_distance:.2f}",
+                label=f"peak distance: {self.peak_distance:.2f}",
             )
 
         if self.gaussian_std is not None:
@@ -130,7 +142,7 @@ class DistanceHistogram:
                 gaussian_range,
                 color="g",
                 alpha=0.1,
-                label="Gaussian fluctuation range",
+                label="gaussian fluctuation range",
             )
 
         if self.uniform_cuttoff is not None:
@@ -139,21 +151,20 @@ class DistanceHistogram:
                 self.bin_edges[-1],
                 color="y",
                 alpha=0.1,
-                label="Uniform distribution range",
+                label="uniform distribution range",
             )
 
-        params = self.suggest_sketchmap_params(1)  # dummy dim, just to get sigma
         if params["sigma"] is not None:
             ax.axvline(
                 params["sigma"],
                 color="m",
                 linestyle="-.",
-                label=f'Suggested sigma: {params["sigma"]:.2f}',
+                label=f'suggested sigma: {params["sigma"]:.2f}',
             )
 
-        ax.set_xlabel("Distance")
-        ax.set_ylabel("Probability Density")
-        ax.set_title("High-Dimensional Distance Distribution Analysis")
+        ax.set_xlabel("distance")
+        ax.set_ylabel("prob density")
+        ax.set_title("High-dim distance distribution analysis")
         ax.legend()
         ax.grid(True)
 
@@ -164,9 +175,7 @@ class DistanceHistogram:
 
         return fig
 
-    def save_analysis_report(self, filepath: str, dimensionality: int) -> None:
-        params = self.suggest_sketchmap_params(dimensionality)
-
+    def save_analysis_report(self, filepath: str, params: dict) -> None:
         with open(filepath, "w") as f:
             f.write("High-dimentional distance distribution analysis report\n")
             f.write("=" * 60 + "\n\n")
