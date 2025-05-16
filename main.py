@@ -54,7 +54,7 @@ def analyse(
     max_distance: Optional[int] = None,
     high_dimension: Optional[int] = None,
     output_filepath: Optional[str] = None,
-    weighted: bool = False,
+    weighted: Optional[bool] = False,
 ):
     logger.info("Start running 'analyze'")
 
@@ -69,7 +69,7 @@ def analyse(
 
     distance_calculator = DistanceCalculator(metric, period, sphere_period)
 
-    distances, dweights = distance_calculator.pairwise_distances(
+    distances, _dweights = distance_calculator.pairwise_distances(
         points, weights, weighted
     )
     logger.info(f"Calculated {len(distances)} distances")
@@ -79,7 +79,8 @@ def analyse(
     analyzer = DistanceHistogram(n_bin, max_distance)
     analyzer.analyze_distance(distances)
 
-    params = analyzer.suggest_sketchmap_params(dim=1024)
+    high_dimension = high_dimension or points.shape[0]
+    params = analyzer.suggest_sketchmap_params(dim=high_dimension)
 
     id = get_id()
     output_filepath = output_filepath or f"analysis_report_{id}.txt"

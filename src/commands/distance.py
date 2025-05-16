@@ -94,9 +94,9 @@ class DistanceCalculator:
                     f"Weights shape {weights.shape} must match points ({n},)"
                 )
 
-            # Compute weight products for all pairs
+            # compute weight products for all pairs
             weight_matrix = weights.unsqueeze(1) * weights.unsqueeze(0)
 
             return dist_matrix, weight_matrix
 
-        return dist_matrix
+        return dist_matrix, torch.ones(len(points), device=DEVICE)
