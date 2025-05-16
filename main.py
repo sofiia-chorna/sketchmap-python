@@ -29,8 +29,6 @@ from src.utils.const import DEVICE
 from src.utils.file import read_file
 from src.utils.logger import get_id, logger
 
-from src.commands.distrib_analyzer import DistanceDistributionAnalyzer
-
 
 @click.group()
 def main():
@@ -52,7 +50,7 @@ def analyse(
     metric: str,
     period: float,
     sphere_period: float,
-    n_bin: int,
+    n_bin: int = 150,
     max_distance: Optional[int] = None,
     high_dimension: Optional[int] = None,
     output_filepath: Optional[str] = None,
@@ -78,7 +76,7 @@ def analyse(
 
     logger.info(f"Start creating histogram")
 
-    analyzer = DistanceHistogram(n_bins=150)
+    analyzer = DistanceHistogram(n_bin, max_distance)
     analyzer.analyze_distance(distances)
 
     params = analyzer.suggest_sketchmap_params(dim=1024)
@@ -87,8 +85,12 @@ def analyse(
     output_filepath = output_filepath or f"analysis_report_{id}.txt"
     plot_filepath = f"distance_analysis_{id}.png"
 
-    analyzer.plot_analysis(save_path=plot_filepath, params=params, input_path=hdim_filepath)
-    analyzer.save_analysis_report(output_filepath, params=params, input_path=hdim_filepath)
+    analyzer.plot_analysis(
+        save_path=plot_filepath, params=params, input_path=hdim_filepath
+    )
+    analyzer.save_analysis_report(
+        output_filepath, params=params, input_path=hdim_filepath
+    )
 
     logger.info(f"Saving histogram to {output_filepath} and plot to {plot_filepath}")
 

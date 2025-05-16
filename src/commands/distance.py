@@ -2,7 +2,6 @@ from typing import Literal, Optional, Tuple
 
 import numpy as np
 import torch
-from scipy.spatial.distance import pdist
 
 from src.utils.const import DEVICE
 
@@ -17,6 +16,7 @@ class DistanceCalculator:
         self.metric = metric
         self.period = period
         self.sphere_period = sphere_period
+
         if metric == "pbc" and period <= 0:
             raise ValueError("Period must be positive for PBC metric")
         if metric == "sphere" and sphere_period <= 0:
@@ -29,17 +29,21 @@ class DistanceCalculator:
         match self.metric:
             case "euclidean":
                 return torch.norm(x - y)
+
             case "dot":
                 return -torch.dot(x, y)
+
             case "pbc":
                 diff = torch.abs(x - y)
                 diff = torch.where(diff > self.period / 2, self.period - diff, diff)
                 return torch.norm(diff)
+
             case "sphere":
                 cos_angle = torch.dot(x, y) / (torch.norm(x) * torch.norm(y))
                 cos_angle = torch.clamp(cos_angle, -1.0, 1.0)
                 angle = torch.acos(cos_angle)
                 return self.sphere_period * angle / (2 * np.pi)
+
             case _:
                 raise ValueError(f"Unknown distance metric: {self.metric}")
 
@@ -49,6 +53,7 @@ class DistanceCalculator:
         weights: Optional[torch.Tensor] = None,
         return_weights: bool = False,
     ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
+
         if not torch.is_tensor(points):
             points = torch.tensor(points, dtype=torch.float32)
 
@@ -58,19 +63,23 @@ class DistanceCalculator:
         match self.metric:
             case "euclidean":
                 dist_matrix = torch.cdist(points, points, p=2)
+
             case "dot":
                 dist_matrix = -torch.matmul(points, points.T)
+
             case "pbc":
                 diff = points.unsqueeze(1) - points.unsqueeze(0)
                 diff = torch.abs(diff)
                 diff = torch.where(diff > self.period / 2, self.period - diff, diff)
                 dist_matrix = torch.norm(diff, dim=-1)
+
             case "sphere":
                 norms = torch.norm(points, dim=1, keepdim=True)
                 cos_angles = torch.matmul(points, points.T) / (norms * norms.T)
                 cos_angles = torch.clamp(cos_angles, -1.0, 1.0)
                 angles = torch.acos(cos_angles)
                 dist_matrix = self.sphere_period * angles / (2 * np.pi)
+
             case _:
                 raise ValueError(f"Unknown distance metric: {self.metric}")
 
