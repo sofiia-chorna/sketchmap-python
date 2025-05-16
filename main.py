@@ -9,7 +9,7 @@ from sklearn.decomposition import PCA
 # from src.commands.dimred import DimRed, auto_select_parameters
 from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
-from src.commands.histogram import DistanceHistogram
+from src.commands.distance_histogram import DistanceHistogram
 from src.commands.landmarks import run_get_landmarks
 from src.utils.cli import (
     hdim_filepath,
@@ -28,6 +28,8 @@ from src.utils.cli import (
 from src.utils.const import DEVICE
 from src.utils.file import read_file
 from src.utils.logger import get_id, logger
+
+from src.commands.distrib_analyzer import DistanceDistributionAnalyzer
 
 
 @click.group()
@@ -75,24 +77,20 @@ def analyse(
     logger.info(f"Calculated {len(distances)} distances")
 
     logger.info(f"Start creating histogram")
-    max_distance = max_distance if max_distance is not None else np.max(distances)
-    bins = np.linspace(0, max_distance, n_bin + 1)
-    hist = DistanceHistogram(bins)
-    hist.add_data_points(distances, dweights)
 
-    results = hist.get_histogram_data()
+    analyzer = DistanceHistogram(n_bins=150)
+    analyzer.analyze_distance(distances)
+
+    params = analyzer.suggest_sketchmap_params(dim=1024)
 
     id = get_id()
-    output_filepath = output_filepath or f"analyse_{id}.csv"
-    plot_filepath = f"analyse_{id}.png"
+    output_filepath = output_filepath or f"analysis_report_{id}.txt"
+    plot_filepath = f"distance_analysis_{id}.png"
+
+    analyzer.plot_analysis(save_path=plot_filepath)
+    analyzer.save_analysis_report(output_filepath, dimensionality=1024)
 
     logger.info(f"Saving histogram to {output_filepath} and plot to {plot_filepath}")
-    hist.save_csv(results, output_filepath)
-    hist.save_plot(results, plot_filepath)
-
-    logger.info(f"Start calculating outliers")
-    out_above, out_below = hist.get_outliers()
-    logger.info(f"Outliers — above: {out_above:.6f}, below: {out_below:.6f}")
 
     logger.info("End running 'analyze'")
 
@@ -317,10 +315,11 @@ def select_landmarks(
     default="euclidean",
     help="Distance metric",
 )
-@click.option("--sigma-hd", type=float, help="Sigma parameter for high-dim sigmoid")
+@click.option(
+    "--sigma", type=float, help="Sigma parameter for high-dim and low-dim sigmoid"
+)
 @click.option("--a-hd", type=int, help="'a' parameter for high-dim sigmoid")
 @click.option("--b-hd", type=int, help="'b' parameter for high-dim sigmoid")
-@click.option("--sigma-ld", type=float, help="Sigma parameter for low-dim sigmoid")
 @click.option("--a-ld", type=int, help="'a' parameter for low-dim sigmoid")
 @click.option("--b-ld", type=int, help="'b' parameter for low-dim sigmoid")
 @click.option("--grid-width", type=float, help="Grid width for global optimization")
@@ -340,10 +339,9 @@ def dimred(
     gopt_steps: int = 3,
     imix: float = 1.0,
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
-    sigma_hd: Optional[float] = None,
+    sigma: Optional[float] = None,
     a_hd: Optional[int] = None,
     b_hd: Optional[int] = None,
-    sigma_ld: Optional[float] = None,
     a_ld: Optional[int] = None,
     b_ld: Optional[int] = None,
     grid_width: Optional[float] = None,
@@ -389,12 +387,11 @@ def dimred(
     if dot and (period != 0.0):
         raise ValueError("Cannot use periodic options with dot product distance")
 
-    if None in [sigma_hd, a_hd, b_hd, sigma_ld, a_ld, b_ld]:
+    if None in [sigma, a_hd, b_hd, a_ld, b_ld]:
         logger.info("Auto-selecting sigmoid parameters")
-        sigma_hd = sigma_hd or 13.0
+        sigma = sigma or 13.0
         a_hd = a_hd or 4
         b_hd = b_hd or 2
-        sigma_ld = sigma_ld or 13.0
         a_ld = a_ld or 2
         b_ld = b_ld or 2
 
@@ -410,8 +407,8 @@ def dimred(
         fine_points=fine_pts,
     )
 
-    reducer.set_transformation("high", "sigmoid", (sigma_hd, a_hd, b_hd))
-    reducer.set_transformation("low", "sigmoid", (sigma_ld, a_ld, b_ld))
+    reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
+    reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
     try:
         logger.info("Running initial MDS")
