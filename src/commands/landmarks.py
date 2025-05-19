@@ -10,85 +10,6 @@ from src.utils.const import DEVICE
 from src.utils.logger import logger
 
 
-def plot_high_dim_landmarks(
-    points: torch.Tensor,
-    landmarks: torch.Tensor,
-    title: str = "Landmark selection (PCA)",
-):
-    points_np = points.cpu().numpy()
-    landmarks_np = landmarks.cpu().numpy()
-
-    pca = PCA(n_components=2)
-    points_2d = pca.fit_transform(points_np)
-    landmarks_2d = pca.transform(landmarks_np)
-
-    plt.figure(figsize=(10, 6))
-    plt.scatter(
-        points_2d[:, 0], points_2d[:, 1], c="gray", alpha=0.3, label="original points"
-    )
-    plt.scatter(
-        landmarks_2d[:, 0], landmarks_2d[:, 1], c="red", s=20, label="landmarks"
-    )
-    plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("landmarks.png", dpi=300)
-
-
-def verify_landmarks(
-    points: torch.Tensor, landmarks: torch.Tensor, calculator: DistanceCalculator
-):
-    # 1. verify distances from all points to landmarks
-    point_to_landmark_dists = calculator.pairwise_distances(points, landmarks)
-    min_dists = point_to_landmark_dists.min(dim=1).values
-
-    coverage_stats = {
-        "avg_dist_to_landmark": min_dists.mean().item(),
-        "max_dist_to_landmark": min_dists.max().item(),
-        "min_dist_to_landmark": min_dists.min().item(),
-        "coverage_ratio": min_dists.mean().item()
-        / point_to_landmark_dists.max().item(),
-    }
-
-    # 2. verify distances between landmarks
-    landmark_dists = calculator.pairwise_distances(landmarks, landmarks)
-
-    # fill diagonal with infinity to ignore self-distances
-    landmark_dists.fill_diagonal_(float("inf"))
-
-    min_landmark_dists = landmark_dists.min(dim=1).values
-    separation_stats = {
-        "min_landmark_separation": min_landmark_dists.min().item(),
-        "avg_landmark_separation": min_landmark_dists.mean().item(),
-        "max_landmark_separation": min_landmark_dists.max().item(),
-        "separation_ratio": min_landmark_dists.min().item()
-        / landmark_dists.max().item(),
-    }
-
-    # 3. check for duplicates or near-duplicates
-    duplicate_threshold = 1e-6
-    num_too_close = (landmark_dists < duplicate_threshold).sum().item() // 2
-    if num_too_close > 0:
-        warning = (
-            f"Found {num_too_close} landmark pairs closer than {duplicate_threshold}"
-        )
-        if logger:
-            logger.warning(warning)
-        else:
-            print(f"Warning: {warning}")
-
-    print("\nLandmark Coverage Statistics:")
-    for k, v in coverage_stats.items():
-        print(f"{k:>25}: {v:.6f}")
-
-    print("\nLandmark Separation Statistics:")
-    for k, v in separation_stats.items():
-        print(f"{k:>25}: {v:.6f}")
-
-    return coverage_stats, separation_stats
-
-
 def run_get_landmarks(
     points: torch.Tensor,
     weights: Optional[torch.Tensor] = None,
@@ -205,3 +126,81 @@ def _compute_voronoi_weights(
         landmark_weights.fill_(1.0 / n_landmarks)
 
     return landmark_weights
+
+
+def plot_pca_landmarks(
+    points: torch.Tensor,
+    landmarks: torch.Tensor,
+    plot_filepath: str,
+    title: str = "Landmark selection (PCA)",
+):
+    points_np = points.cpu().numpy()
+    landmarks_np = landmarks.cpu().numpy()
+
+    pca = PCA(n_components=2)
+    points_2d = pca.fit_transform(points_np)
+    landmarks_2d = pca.transform(landmarks_np)
+
+    plt.figure(figsize=(10, 6))
+    plt.scatter(
+        points_2d[:, 0], points_2d[:, 1], c="gray", alpha=0.3, label="original points"
+    )
+    plt.scatter(
+        landmarks_2d[:, 0], landmarks_2d[:, 1], c="red", s=20, label="landmarks"
+    )
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(plot_filepath, dpi=300)
+
+
+def get_landmark_stat(
+    points: torch.Tensor,
+    landmarks: torch.Tensor,
+    calculator: DistanceCalculator,
+    stat_filepath: str,
+):
+    # 1. verify distances from all points to landmarks
+    point_to_landmark_dists = calculator.pairwise_distances(points, landmarks)
+    min_dists = point_to_landmark_dists.min(dim=1).values
+
+    coverage_stats = {
+        "avg_dist_to_landmark": min_dists.mean().item(),
+        "max_dist_to_landmark": min_dists.max().item(),
+        "min_dist_to_landmark": min_dists.min().item(),
+        "coverage_ratio": min_dists.mean().item()
+        / point_to_landmark_dists.max().item(),
+    }
+
+    # 2. verify distances between landmarks
+    landmark_dists = calculator.pairwise_distances(landmarks, landmarks)
+
+    # fill diagonal with infinity to ignore self-distances
+    landmark_dists.fill_diagonal_(float("inf"))
+
+    min_landmark_dists = landmark_dists.min(dim=1).values
+    separation_stats = {
+        "min_landmark_separation": min_landmark_dists.min().item(),
+        "avg_landmark_separation": min_landmark_dists.mean().item(),
+        "max_landmark_separation": min_landmark_dists.max().item(),
+        "separation_ratio": min_landmark_dists.min().item()
+        / landmark_dists.max().item(),
+    }
+
+    # 3. check for duplicates or near-duplicates
+    duplicate_threshold = 1e-6
+    num_too_close = (landmark_dists < duplicate_threshold).sum().item() // 2
+    if num_too_close > 0:
+        logger.warning(
+            f"Found {num_too_close} landmark pairs closer than {duplicate_threshold}"
+        )
+
+    with open(stat_filepath, "w") as file:
+        file.write("\nLandmark coverage statistics:\n")
+        for k, v in coverage_stats.items():
+            file.write(f"{k:<30}: {v:.6f}\n")
+
+        file.write("\nLandmark separation statistics:\n")
+        for k, v in separation_stats.items():
+            file.write(f"{k:<30}: {v:.6f}\n")

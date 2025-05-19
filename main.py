@@ -9,9 +9,9 @@ from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
 from src.commands.distance_histogram import DistanceHistogram
 from src.commands.landmarks import (
-    plot_high_dim_landmarks,
+    plot_pca_landmarks,
     run_get_landmarks,
-    verify_landmarks,
+    get_landmark_stat,
 )
 from src.utils.cli import (
     hdim_filepath,
@@ -29,6 +29,7 @@ from src.utils.cli import (
     sphere_period,
     weighted,
     compute_weights,
+    run_check,
 )
 from src.utils.const import DEVICE
 from src.utils.file import read_file
@@ -114,6 +115,7 @@ def analyse(
 @weighted
 @compute_weights
 @numpy
+@run_check
 def select_landmarks(
     hdim_filepath: str,
     num: int,
@@ -127,6 +129,7 @@ def select_landmarks(
     weighted: Optional[bool],
     compute_weights: Optional[bool],
     numpy: bool,
+    run_check: bool,
 ):
     logger.info("Start running 'select-landmarks'")
 
@@ -177,10 +180,20 @@ def select_landmarks(
     else:
         torch.save(combined, output_filepath)
 
-    calculator = DistanceCalculator(metric)
-    verify_landmarks(points, landmarks, calculator)
+    if run_check:
+        logger.info("Run landmark verification")
 
-    plot_high_dim_landmarks(points, landmarks)
+        id = get_id()
+        stat_filepath = f"landmarks_check_{id}.txt"
+        plot_filepath = f"highlandmarks_pca_{id}.png"
+
+        calculator = DistanceCalculator(metric, period, sphere_period)
+        get_landmark_stat(points, landmarks, calculator, stat_filepath)
+
+        plot_pca_landmarks(points, landmarks, plot_filepath)
+    
+        logger.info(f"Saving histogram to {stat_filepath} and plot to {plot_filepath}")
+
     logger.info("Finished landmark selection")
 
 

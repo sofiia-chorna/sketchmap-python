@@ -32,6 +32,9 @@ Replace `high_dimension_data.pt` with your filename to select points from.
 
 By default `min-max` selection algorithm is used (currently the only one implemented): the first point is selected randomly, and each consequative point is selected being the farthest from the already selected points. The algorithm stops once the desired number of points is reached.
 
+`--run-check` option is highly recommended. It calculates the coverage and separation statistics on the selected landmarks and generates a plot with selected points highlighed over the PCA of all highdimentional data. It help to evaluate quantitavely and qualitatively the sampling.
+
+
 | Option            | Description                                                              |
 | ------------------ | ------------------------------------------------------------------------ |
 | `--hdim-filepath` / `--P`              | Path to input high-dimensional data file (required)                       |
@@ -44,6 +47,7 @@ By default `min-max` selection algorithm is used (currently the only one impleme
 | `--period`             | Periodicity for pbc metric  |
 | `--sphere-period`             |  Periodicity for spherical distance metric  |
 | `--numpy`             |  Save in numpy format  |
+| `--run-check`             |  Run and save coverage and separation statistics on the selected points as well as a plot with PCA with on all data with highlighted selected points  |
 
 
 When `--compute-weights` is enabled, the algorithm assigns to each landmark a Voronoi like weight that reflects the number of points that are closer to that landmark than to any other one.

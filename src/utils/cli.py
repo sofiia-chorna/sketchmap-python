@@ -107,6 +107,15 @@ def select_mode(func):
     )(func)
 
 
+def run_check(func):
+    return click.option(
+        "--run-check/--no-run-check",
+        help="Run a check after the main operation",
+        type=bool,
+        default=False,
+    )(func)
+
+
 def metric(func):
     return click.option(
         "--metric",
