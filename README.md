@@ -26,13 +26,13 @@ Replace `high_dimension_data.pt` with your filename.
 Samples representative points from a high-dimensional dataset using FPS.
 
 ```bash
-python3 main.py select-landmarks --hdim-filepath high_dimension_data.pt --output_filepath sampled.pt
+python3 main.py select-landmarks --hdim-filepath high_dimension_data.pt --run-check
 ```
 Replace `high_dimension_data.pt` with your filename to select points from.
 
-By default `min-max` selection algorithm is used (currently the only one implemented): the first point is selected randomly, and each consequative point is selected being the farthest from the already selected points. The algorithm stops once the desired number of points is reached.
+`--run-check` is **optional** but highly recommended. It calculates the coverage and separation statistics on the selected landmarks and generates a plot with selected points highlighed over the PCA of all highdimentional data. It help to evaluate quantitavely and qualitatively the sampling.
 
-`--run-check` option is highly recommended. It calculates the coverage and separation statistics on the selected landmarks and generates a plot with selected points highlighed over the PCA of all highdimentional data. It help to evaluate quantitavely and qualitatively the sampling.
+By default `min-max` selection algorithm is used (currently the only one implemented): the first point is selected randomly, and each consequative point is selected being the farthest from the already selected points. The algorithm stops once the desired number of points is reached.
 
 
 | Option            | Description                                                              |
@@ -41,12 +41,12 @@ By default `min-max` selection algorithm is used (currently the only one impleme
 | `--num`/ `--n`             | Number of landmarks to select (default: 1000)  |
 | `--select-mode`             | Selection mode (currently only "minmax" supported)  |
 | `--save-indices` / `--i`             | Save original indices of selected landmarks to the first column  |
-| `--output-filepath`             | Path to save output landmarks  |
 | `--compute-weights`              | Save a weight of landmark proportional to the number of points in its Voronoi cell ("region of influence") as the last column |
 | `--metric`             | Distance metric ("euclidean" - default, "dot", "pbc", or "sphere")  |
 | `--period`             | Periodicity for pbc metric  |
 | `--sphere-period`             |  Periodicity for spherical distance metric  |
 | `--numpy`             |  Save in numpy format  |
+| `--output-filepath`             | Path to the custom output landmarks  |
 | `--run-check`             |  Run and save coverage and separation statistics on the selected points as well as a plot with PCA with on all data with highlighted selected points  |
 
 
