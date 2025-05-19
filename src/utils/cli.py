@@ -39,9 +39,9 @@ def n_bin(func):
 
 def weighted(func):
     return click.option(
-        "--weighted",
+        "--weighted/--no-weighted",
         "--w",
-        default=False,
+        default=True,
         is_flag=True,
         help="True if data is weighted",
         type=bool,
@@ -110,4 +110,15 @@ def sphere_period(func):
         type=float,
         default=0.0,
         help="Required for metric 'sphere' (sperical distances). Defines the circumference of the sphere",
+    )(func)
+
+
+def save_indices(func):
+    return click.option(
+        "--save-indices/--no-save-indices",
+        "--i",
+        type=bool,
+        is_flag=True,
+        default=False,
+        help="Should indices of the selected landmarks be saved as a first column",
     )(func)
