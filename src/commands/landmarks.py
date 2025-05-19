@@ -1,10 +1,92 @@
 from typing import Literal, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import torch
+from sklearn.decomposition import PCA
 from tqdm import tqdm
 
 from src.commands.distance import DistanceCalculator
 from src.utils.const import DEVICE
+from src.utils.logger import logger
+
+
+def plot_high_dim_landmarks(
+    points: torch.Tensor,
+    landmarks: torch.Tensor,
+    title: str = "Landmark selection (PCA)",
+):
+    points_np = points.cpu().numpy()
+    landmarks_np = landmarks.cpu().numpy()
+
+    pca = PCA(n_components=2)
+    points_2d = pca.fit_transform(points_np)
+    landmarks_2d = pca.transform(landmarks_np)
+
+    plt.figure(figsize=(10, 6))
+    plt.scatter(
+        points_2d[:, 0], points_2d[:, 1], c="gray", alpha=0.3, label="original points"
+    )
+    plt.scatter(
+        landmarks_2d[:, 0], landmarks_2d[:, 1], c="red", s=20, label="landmarks"
+    )
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("landmarks.png", dpi=300)
+
+
+def verify_landmarks(
+    points: torch.Tensor, landmarks: torch.Tensor, calculator: DistanceCalculator
+):
+    # 1. verify distances from all points to landmarks
+    point_to_landmark_dists = calculator.pairwise_distances(points, landmarks)
+    min_dists = point_to_landmark_dists.min(dim=1).values
+
+    coverage_stats = {
+        "avg_dist_to_landmark": min_dists.mean().item(),
+        "max_dist_to_landmark": min_dists.max().item(),
+        "min_dist_to_landmark": min_dists.min().item(),
+        "coverage_ratio": min_dists.mean().item()
+        / point_to_landmark_dists.max().item(),
+    }
+
+    # 2. verify distances between landmarks
+    landmark_dists = calculator.pairwise_distances(landmarks, landmarks)
+
+    # fill diagonal with infinity to ignore self-distances
+    landmark_dists.fill_diagonal_(float("inf"))
+
+    min_landmark_dists = landmark_dists.min(dim=1).values
+    separation_stats = {
+        "min_landmark_separation": min_landmark_dists.min().item(),
+        "avg_landmark_separation": min_landmark_dists.mean().item(),
+        "max_landmark_separation": min_landmark_dists.max().item(),
+        "separation_ratio": min_landmark_dists.min().item()
+        / landmark_dists.max().item(),
+    }
+
+    # 3. check for duplicates or near-duplicates
+    duplicate_threshold = 1e-6
+    num_too_close = (landmark_dists < duplicate_threshold).sum().item() // 2
+    if num_too_close > 0:
+        warning = (
+            f"Found {num_too_close} landmark pairs closer than {duplicate_threshold}"
+        )
+        if logger:
+            logger.warning(warning)
+        else:
+            print(f"Warning: {warning}")
+
+    print("\nLandmark Coverage Statistics:")
+    for k, v in coverage_stats.items():
+        print(f"{k:>25}: {v:.6f}")
+
+    print("\nLandmark Separation Statistics:")
+    for k, v in separation_stats.items():
+        print(f"{k:>25}: {v:.6f}")
+
+    return coverage_stats, separation_stats
 
 
 def run_get_landmarks(
@@ -23,13 +105,6 @@ def run_get_landmarks(
 
     torch.manual_seed(seed)
 
-    N, _D = points.shape
-
-    if weights is None:
-        weights = torch.ones(N, device=DEVICE)
-    elif weights.device != DEVICE:
-        weights = weights.to(DEVICE)
-
     calculator = DistanceCalculator(metric, period, sphere_period)
 
     if mode == "minmax":
@@ -39,11 +114,18 @@ def run_get_landmarks(
             weights=weights,
             num=num,
             first_index=first_index,
-            weighted=weighted,
+            compute_weights=weighted,
             weight_gamma=weight_gamma,
         )
     else:
         raise ValueError(f"Unsupported selection mode: {mode}")
+
+    if weighted:
+        weights = landmark_weights.unsqueeze(-1)
+    else:
+        weights = torch.ones(len(landmarks), device=DEVICE).unsqueeze(-1) / len(
+            landmarks
+        )
 
     return landmarks, landmark_indices, landmark_weights
 
@@ -54,15 +136,14 @@ def _minmax_selection(
     weights: torch.Tensor,
     num: int,
     first_index: int = -1,
-    weighted: bool = False,
+    compute_weights: bool = False,
     weight_gamma: float = 1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
-    N, _D = points.shape
+    N = points.shape[0]
 
     landmark_indices = torch.zeros(num, dtype=torch.long, device=DEVICE)
 
-    # select first indices
     if first_index < 0:
         landmark_indices[0] = torch.randint(0, N, (1,), device=DEVICE)
     else:
@@ -75,10 +156,10 @@ def _minmax_selection(
 
     for i in pbar:
         # find point with maximum min distance
-        max_idx = torch.argmax(min_dists).item()
-        landmark_indices[i] = max_idx
+        max_id = torch.argmax(min_dists).item()
+        landmark_indices[i] = max_id
 
-        new_dists = all_dists[max_idx]
+        new_dists = all_dists[max_id]
 
         min_dists = torch.minimum(min_dists, new_dists)
 
@@ -86,7 +167,7 @@ def _minmax_selection(
 
     landmarks = points[landmark_indices]
 
-    if weighted:
+    if compute_weights:
         landmark_weights = _compute_voronoi_weights(
             points, weights, landmarks, weight_gamma
         )

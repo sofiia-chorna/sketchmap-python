@@ -1,16 +1,18 @@
 from typing import Literal, Optional
 
 import click
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from sklearn.decomposition import PCA
 
 # from src.commands.dimred import DimRed, auto_select_parameters
 from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
 from src.commands.distance_histogram import DistanceHistogram
-from src.commands.landmarks import run_get_landmarks
+from src.commands.landmarks import (
+    run_get_landmarks,
+    verify_landmarks,
+    plot_high_dim_landmarks,
+)
 from src.utils.cli import (
     hdim_filepath,
     high_dimension,
@@ -21,6 +23,7 @@ from src.utils.cli import (
     num,
     output_filepath,
     period,
+    save_indices,
     select_mode,
     sphere_period,
     weighted,
@@ -50,11 +53,11 @@ def analyse(
     metric: str,
     period: float,
     sphere_period: float,
-    n_bin: int = 150,
-    max_distance: Optional[int] = None,
-    high_dimension: Optional[int] = None,
-    output_filepath: Optional[str] = None,
-    weighted: Optional[bool] = False,
+    n_bin: int,
+    max_distance: Optional[int],
+    high_dimension: Optional[int],
+    output_filepath: Optional[str],
+    weighted: Optional[bool],
 ):
     logger.info("Start running 'analyze'")
 
@@ -69,9 +72,7 @@ def analyse(
 
     distance_calculator = DistanceCalculator(metric, period, sphere_period)
 
-    distances, _dweights = distance_calculator.pairwise_distances(
-        points, weights, weighted
-    )
+    distances = distance_calculator.pairwise_distances(points, points)
     logger.info(f"Calculated {len(distances)} distances")
 
     logger.info(f"Start creating histogram")
@@ -98,132 +99,43 @@ def analyse(
     logger.info("End running 'analyze'")
 
 
-def plot_high_dim_landmarks(
-    points: torch.Tensor,
-    landmarks: torch.Tensor,
-    title: str = "Landmark Selection (PCA)",
-):
-    points_np = points.cpu().numpy()
-    landmarks_np = landmarks.cpu().numpy()
-
-    pca = PCA(n_components=2)
-    points_2d = pca.fit_transform(points_np)
-    landmarks_2d = pca.transform(landmarks_np)
-
-    plt.figure(figsize=(10, 6))
-    plt.scatter(
-        points_2d[:, 0], points_2d[:, 1], c="gray", alpha=0.3, label="Original Points"
-    )
-    plt.scatter(
-        landmarks_2d[:, 0], landmarks_2d[:, 1], c="red", s=20, label="Landmarks"
-    )
-    plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("landmarks.png", dpi=300)
-
-
-def verify_landmarks(
-    points: torch.Tensor, landmarks: torch.Tensor, calculator: DistanceCalculator
-):
-    # 1. verify distances from all points to landmarks
-    point_to_landmark_dists = calculator.pairwise_distances(points, landmarks)
-    min_dists = point_to_landmark_dists.min(dim=1).values
-
-    coverage_stats = {
-        "avg_dist_to_landmark": min_dists.mean().item(),
-        "max_dist_to_landmark": min_dists.max().item(),
-        "min_dist_to_landmark": min_dists.min().item(),
-        "coverage_ratio": min_dists.mean().item()
-        / point_to_landmark_dists.max().item(),
-    }
-
-    # 2. verify distances between landmarks
-    landmark_dists = calculator.pairwise_distances(landmarks)
-
-    # fill diagonal with infinity to ignore self-distances
-    landmark_dists.fill_diagonal_(float("inf"))
-
-    min_landmark_dists = landmark_dists.min(dim=1).values
-    separation_stats = {
-        "min_landmark_separation": min_landmark_dists.min().item(),
-        "avg_landmark_separation": min_landmark_dists.mean().item(),
-        "max_landmark_separation": min_landmark_dists.max().item(),
-        "separation_ratio": min_landmark_dists.min().item()
-        / landmark_dists.max().item(),
-    }
-
-    # 3. check for duplicates or near-duplicates
-    duplicate_threshold = 1e-6
-    num_too_close = (landmark_dists < duplicate_threshold).sum().item() // 2
-    if num_too_close > 0:
-        warning = (
-            f"Found {num_too_close} landmark pairs closer than {duplicate_threshold}"
-        )
-        if logger:
-            logger.warning(warning)
-        else:
-            print(f"Warning: {warning}")
-
-    print("\nLandmark Coverage Statistics:")
-    for k, v in coverage_stats.items():
-        print(f"{k:>25}: {v:.6f}")
-
-    print("\nLandmark Separation Statistics:")
-    for k, v in separation_stats.items():
-        print(f"{k:>25}: {v:.6f}")
-
-    return coverage_stats, separation_stats
-
-
 @main.command()
 @hdim_filepath
 @num
 @select_mode
 @high_dimension
 @output_filepath
+@save_indices
+@metric
+@period
+@sphere_period
 @weighted
-@click.option(
-    "--metric",
-    type=click.Choice(["euclidean", "dot", "pbc"]),
-    default="euclidean",
-    help="Distance metric",
-)
-@click.option(
-    "--save-indices",
-    "--i",
-    type=bool,
-    is_flag=True,
-    default=False,
-    help="Should indices of the selected landmarks be saved as a first column",
-)
 def select_landmarks(
     hdim_filepath: str,
-    num: int = 1000,
-    select_mode: str = "minmax",
-    high_dimension: Optional[int] = None,
-    output_filepath: str = "high_landmarks.dat",
-    weighted: bool = True,
-    metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
-    save_indices: bool = False,
+    num: int,
+    select_mode: str,
+    high_dimension: Optional[int],
+    output_filepath: Optional[str],
+    save_indices: bool,
+    metric: str,
+    period: float,
+    sphere_period: float,
+    weighted: Optional[bool],
 ):
-    weighted = True
     logger.info("Start running 'select-landmarks'")
-    logger.info(f"Params: num={num}, select_mode={select_mode}, weighted={weighted}")
+
+    params = locals()
+    logger.info(f"Parameters: {params}")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
     points_np, weights_np = read_file(hdim_filepath, high_dimension, weighted)
     logger.info(f"Read {len(points_np)} points")
 
-    print("Number of NaN in input points:", np.isnan(points_np.cpu().numpy()).sum())
-    print("Number of NaN in input weights:", np.isnan(weights_np.cpu().numpy()).sum())
-
-    points = torch.tensor(points_np, device=DEVICE)
-    weights = torch.tensor(weights_np, device=DEVICE)
+    points = points_np.clone().detach()
+    weights = weights_np.clone().detach()
 
     unique_points = torch.unique(points, dim=0)
-    print(f"Total points: {len(points)}, Unique points: {len(unique_points)}")
+    logger.info(f"Total points: {len(points)}, unique points: {len(unique_points)}")
 
     logger.info("Start selecting high-landmarks")
 
@@ -234,25 +146,16 @@ def select_landmarks(
         mode=select_mode,
         metric=metric,
         weighted=weighted,
-        # period=period,
-        # sphere_period=sphere_period,
-        #  first_index=args.first_index,
-        #   compute_weights=args.compute_weights,
-        #   weight_gamma=args.weight_gamma,
+        period=period,
+        sphere_period=sphere_period,
     )
 
-    print(
-        f"# {len(landmarks)} landmark points selected out of {len(points)} and chosen by {select_mode}"
+    logger.info(
+        f"{len(landmarks)} landmark points selected out of {len(points)} and chosen by {select_mode}"
     )
 
-    if weighted:
-        weights = landmark_weights.unsqueeze(-1)
-    else:
-        weights = torch.ones(len(landmarks), device=DEVICE).unsqueeze(-1) / len(
-            landmarks
-        )
-
-    combined = torch.cat([landmarks, weights], dim=-1)
+    landmark_weights = landmark_weights.unsqueeze(-1)  # shape: (num, 1)
+    combined = torch.cat([landmarks, landmark_weights], dim=-1)
 
     if save_indices:
         indices = indices.unsqueeze(-1).float()  # shape: (num, 1)

@@ -49,33 +49,35 @@ class DistanceCalculator:
 
     def pairwise_distances(
         self,
-        points: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        return_weights: bool = False,
+        points_1: torch.Tensor,
+        points_2: torch.Tensor,
     ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
 
-        if not torch.is_tensor(points):
-            points = torch.tensor(points, dtype=torch.float32)
+        if not torch.is_tensor(points_1):
+            points_1 = torch.tensor(points_1, dtype=torch.float32)
 
-        points = points.to(DEVICE)
-        n = points.shape[0]
+        if not torch.is_tensor(points_2):
+            points_2 = torch.tensor(points_2, dtype=torch.float32)
+
+        points_1 = points_1.to(DEVICE)
+        points_2 = points_2.to(DEVICE)
 
         match self.metric:
             case "euclidean":
-                dist_matrix = torch.cdist(points, points, p=2)
+                dist_matrix = torch.cdist(points_1, points_2, p=2)
 
             case "dot":
-                dist_matrix = -torch.matmul(points, points.T)
+                dist_matrix = -torch.matmul(points_1, points_2.T)
 
             case "pbc":
-                diff = points.unsqueeze(1) - points.unsqueeze(0)
+                diff = points_1.unsqueeze(1) - points_2.unsqueeze(0)
                 diff = torch.abs(diff)
                 diff = torch.where(diff > self.period / 2, self.period - diff, diff)
                 dist_matrix = torch.norm(diff, dim=-1)
 
             case "sphere":
-                norms = torch.norm(points, dim=1, keepdim=True)
-                cos_angles = torch.matmul(points, points.T) / (norms * norms.T)
+                norms = torch.norm(points_1, dim=1, keepdim=True)
+                cos_angles = torch.matmul(points_1, points_2.T) / (norms * norms.T)
                 cos_angles = torch.clamp(cos_angles, -1.0, 1.0)
                 angles = torch.acos(cos_angles)
                 dist_matrix = self.sphere_period * angles / (2 * np.pi)
@@ -87,16 +89,4 @@ class DistanceCalculator:
             nan_count = torch.isnan(dist_matrix).sum()
             raise ValueError(f"Distance matrix contains {nan_count} NaN values")
 
-        if return_weights and weights is not None:
-            weights = weights.to(DEVICE)
-            if weights.shape != (n,):
-                raise ValueError(
-                    f"Weights shape {weights.shape} must match points ({n},)"
-                )
-
-            # compute weight products for all pairs
-            weight_matrix = weights.unsqueeze(1) * weights.unsqueeze(0)
-
-            return dist_matrix, weight_matrix
-
-        return dist_matrix, torch.ones(len(points), device=DEVICE)
+        return dist_matrix
