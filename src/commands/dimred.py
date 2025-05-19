@@ -73,6 +73,11 @@ class DimRed:
 
         y = 1 / (1 + (x / sigma) ** a) ** b
         dy = -a * b * (x / sigma) ** (a - 1) * y ** (1 + 1 / b) / sigma
+        # C++: 1 - (1 + (2^(a/b) - 1)(x/s)^a)^(-b/a)
+        # term = 1 + (2.0 ** (a / b) - 1) * (x / sigma) ** a
+        # y = 1 - term ** (-b / a)
+        # dy = (2.0 ** (a / b) - 1) * (b / sigma) * (x / sigma) ** (a - 1) * term ** (-b / a - 1)
+
         return y, dy
 
     def _to_tensor(self, data, dtype=torch.float32):
@@ -121,6 +126,7 @@ class DimRed:
 
         # scaled eigenvectors
         return vecs[:, idx] * torch.sqrt(vals[idx])
+        #return vecs[:, idx]
 
     def _stress_function(
         self,
