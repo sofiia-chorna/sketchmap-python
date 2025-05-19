@@ -26,7 +26,7 @@ Replace high_dimension_data.pt with your filename.
 Samples representative points from a high-dimensional dataset using FPS.
 
 ```bash
-python3 main.py select-landmarks --P high_dimension_data.pt  --output_filepath sampled.pt
+python3 main.py select-landmarks --hdim-filepath high_dimension_data.pt --output_filepath sampled.pt
 ```
 Replace high_dimension_data.pt with your filename to select points from.
 
@@ -34,7 +34,7 @@ By default `min-max` selection algorithm is used (currently the only one impleme
 
 | Option            | Description                                                              |
 | ------------------ | ------------------------------------------------------------------------ |
-| `--hdim-filepat`/ `--P` | Path to input high-dimensional data file (required)                       |
+| `--hdim-filepath`/ `--P` | Path to input high-dimensional data file (required)                       |
 | `--num`             | Number of landmarks to select (default: 1000)  |
 | `--select-mode`             | Selection mode (currently only "minmax" supported)  |
 | `--save-indices`             | Save original indices of selected landmarks to the first column  |

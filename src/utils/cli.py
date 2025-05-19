@@ -3,7 +3,7 @@ import click
 
 def hdim_filepath(func):
     return click.option(
-        "--hdim_filepath",
+        "--hdim-filepath",
         "--P",
         required=True,
         help="Path to the high-dimentional data file (.pt or text)",
@@ -13,7 +13,7 @@ def hdim_filepath(func):
 
 def output_filepath(func):
     return click.option(
-        "--output_filepath",
+        "--output-filepath",
         help="Path to the result file",
         type=str,
     )(func)
@@ -21,7 +21,7 @@ def output_filepath(func):
 
 def max_distance(func):
     return click.option(
-        "--max_distance",
+        "--max-distance",
         "--maxd",
         help="Maximum distance to consider in pairwise distance calculations",
         type=int,
@@ -30,7 +30,7 @@ def max_distance(func):
 
 def n_bin(func):
     return click.option(
-        "--n_bin",
+        "--n-bin",
         default=150,
         help="Number of bins to use in the histogram",
         type=int,
@@ -71,7 +71,7 @@ def numpy(func):
 
 def high_dimension(func):
     return click.option(
-        "--high_dimension",
+        "--high-dimension",
         "--highd",
         help="Dimention to consider for the input highdim data",
         type=int,
@@ -80,7 +80,7 @@ def high_dimension(func):
 
 def low_dimension(func):
     return click.option(
-        "--low_dimension",
+        "--low-dimension",
         "--lowd",
         help="Dimention to consider for the lowdim data",
         type=int,
@@ -99,7 +99,7 @@ def num(func):
 
 def select_mode(func):
     return click.option(
-        "--select_mode",
+        "--select-mode",
         "--mode",
         help="Number of data to select",
         type=click.Choice(["minmax", "random"], case_sensitive=False),
@@ -127,7 +127,7 @@ def period(func):
 
 def sphere_period(func):
     return click.option(
-        "--sphere_period",
+        "--sphere-period",
         type=float,
         default=0.0,
         help="Required for metric 'sphere' (sperical distances). Defines the circumference of the sphere",
