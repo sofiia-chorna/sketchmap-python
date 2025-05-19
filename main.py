@@ -28,6 +28,7 @@ from src.utils.cli import (
     select_mode,
     sphere_period,
     weighted,
+    compute_weights,
 )
 from src.utils.const import DEVICE
 from src.utils.file import read_file
@@ -111,6 +112,7 @@ def analyse(
 @period
 @sphere_period
 @weighted
+@compute_weights
 @numpy
 def select_landmarks(
     hdim_filepath: str,
@@ -123,6 +125,8 @@ def select_landmarks(
     period: float,
     sphere_period: float,
     weighted: Optional[bool],
+    compute_weights: Optional[bool],
+    numpy: bool,
 ):
     logger.info("Start running 'select-landmarks'")
 
@@ -147,7 +151,7 @@ def select_landmarks(
         num=num,
         mode=select_mode,
         metric=metric,
-        weighted=weighted,
+        compute_weights=compute_weights,
         period=period,
         sphere_period=sphere_period,
     )
@@ -156,12 +160,15 @@ def select_landmarks(
         f"{len(landmarks)} landmark points selected out of {len(points)} and chosen by {select_mode}"
     )
 
-    landmark_weights = landmark_weights.unsqueeze(-1)  # shape: (num, 1)
-    combined = torch.cat([landmarks, landmark_weights], dim=-1)
+    if compute_weights:
+        landmark_weights = landmark_weights.unsqueeze(-1)  # shape: (num, 1)
+        combined = torch.cat([landmarks, landmark_weights], dim=-1)
+    else:
+        combined = landmarks
 
     if save_indices:
         indices = indices.unsqueeze(-1).float()  # shape: (num, 1)
-        combined = torch.cat([indices, combined], dim=-1)  # shape: (num, D+2)
+        combined = torch.cat([indices, combined], dim=-1)  # shape: (num, D+1 or D+2)
 
     logger.info(f"Saving landmarks to {output_filepath}")
 

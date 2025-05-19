@@ -92,7 +92,7 @@ def verify_landmarks(
 def run_get_landmarks(
     points: torch.Tensor,
     weights: Optional[torch.Tensor] = None,
-    weighted: bool = True,
+    compute_weights: bool = False,
     num: int = 1000,
     mode: Literal["minmax"] = "minmax",
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
@@ -114,13 +114,13 @@ def run_get_landmarks(
             weights=weights,
             num=num,
             first_index=first_index,
-            compute_weights=weighted,
+            compute_weights=compute_weights,
             weight_gamma=weight_gamma,
         )
     else:
         raise ValueError(f"Unsupported selection mode: {mode}")
 
-    if weighted:
+    if compute_weights:
         weights = landmark_weights.unsqueeze(-1)
     else:
         weights = torch.ones(len(landmarks), device=DEVICE).unsqueeze(-1) / len(

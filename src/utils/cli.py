@@ -48,6 +48,17 @@ def weighted(func):
     )(func)
 
 
+def compute_weights(func):
+    return click.option(
+        "--compute-weights",
+        "--w",
+        default=False,
+        is_flag=True,
+        help="Should compute voronoi weights",
+        type=bool,
+    )(func)
+
+
 def numpy(func):
     return click.option(
         "--numpy",
