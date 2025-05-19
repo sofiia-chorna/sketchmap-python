@@ -45,3 +45,5 @@ By default `min-max` selection algorithm is used (currently the only one impleme
 | `--sphere-period`             |  Periodicity for spherical distance metric  |
 | `--numpy`             |  Save in numpy format  |
 
+
+When `--compute-weights` is enabled, the algorithm assigns to each landmark a Voronoi like weight that reflects the number of points that are closer to that landmark than to any other one.
