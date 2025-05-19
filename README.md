@@ -46,7 +46,7 @@ By default `min-max` selection algorithm is used (currently the only one impleme
 | `--period`             | Periodicity for pbc metric  |
 | `--sphere-period`             |  Periodicity for spherical distance metric  |
 | `--numpy`             |  Save in numpy format  |
-| `--output-filepath`             | Path to the custom output landmarks  |
+| `--output-filepath`             | Path to the custom output filepath to save landmarks  |
 | `--run-check`             |  Run and save coverage and separation statistics on the selected points as well as a plot with PCA with on all data with highlighted selected points  |
 
 
