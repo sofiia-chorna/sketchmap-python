@@ -1,7 +1,8 @@
-from typing import Optional
+from typing import Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from scipy.optimize import curve_fit
 
 from src.utils.logger import logger
@@ -18,7 +19,10 @@ class DistanceHistogram:
         self.gaussian_std = None
         self.uniform_cuttoff = None
 
-    def analyze_distance(self, distances: np.ndarray):
+    def analyze_distance(self, distances: Union[torch.Tensor, np.ndarray]):
+        if isinstance(distances, torch.Tensor):
+            distances = distances.cpu().numpy()
+
         if self.max_distance is None:
             self.max_distance = np.percentile(distances, 99.9)
             logger.info(f"Auto-set max_distance to {self.max_distance:.2f}")

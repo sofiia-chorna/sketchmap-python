@@ -1,3 +1,4 @@
+import os
 from typing import Literal, Optional
 
 import click
@@ -9,11 +10,12 @@ from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
 from src.commands.distance_histogram import DistanceHistogram
 from src.commands.landmarks import (
+    get_landmark_stat,
     plot_pca_landmarks,
     run_get_landmarks,
-    get_landmark_stat,
 )
 from src.utils.cli import (
+    compute_weights,
     hdim_filepath,
     high_dimension,
     low_dimension,
@@ -24,16 +26,15 @@ from src.utils.cli import (
     numpy,
     output_filepath,
     period,
+    run_check,
     save_indices,
     select_mode,
     sphere_period,
     weighted,
-    compute_weights,
-    run_check,
 )
 from src.utils.const import DEVICE
 from src.utils.file import read_file
-from src.utils.logger import get_id, logger
+from src.utils.logger import RUN_PATH, logger
 
 
 @click.group()
@@ -86,9 +87,10 @@ def analyse(
     high_dimension = high_dimension or points.shape[0]
     params = analyzer.suggest_sketchmap_params(dim=high_dimension)
 
-    id = get_id()
-    output_filepath = output_filepath or f"analysis_report_{id}.txt"
-    plot_filepath = f"distance_analysis_{id}.png"
+    output_filepath = output_filepath or os.path.join(
+        RUN_PATH, "distance_analysis_report.txt"
+    )
+    plot_filepath = os.path.join(RUN_PATH, f"distance_analysis_histogram.png")
 
     analyzer.plot_analysis(
         save_path=plot_filepath, params=params, input_path=hdim_filepath
@@ -173,6 +175,9 @@ def select_landmarks(
         indices = indices.unsqueeze(-1).float()  # shape: (num, 1)
         combined = torch.cat([indices, combined], dim=-1)  # shape: (num, D+1 or D+2)
 
+    landmarks_filepath = "landmarks.dat" if numpy else "landmarks.pt"
+    output_filepath = output_filepath or os.path.join(RUN_PATH, landmarks_filepath)
+
     logger.info(f"Saving landmarks to {output_filepath}")
 
     if numpy:
@@ -183,15 +188,14 @@ def select_landmarks(
     if run_check:
         logger.info("Run landmark verification")
 
-        id = get_id()
-        stat_filepath = f"landmarks_check_{id}.txt"
-        plot_filepath = f"highlandmarks_pca_{id}.png"
+        stat_filepath = os.path.join(RUN_PATH, "landmarks_check_report.txt")
+        plot_filepath = os.path.join(RUN_PATH, "landmarks_pca_plot.png")
 
         calculator = DistanceCalculator(metric, period, sphere_period)
         get_landmark_stat(points, landmarks, calculator, stat_filepath)
 
         plot_pca_landmarks(points, landmarks, plot_filepath)
-    
+
         logger.info(f"Saving histogram to {stat_filepath} and plot to {plot_filepath}")
 
     logger.info("Finished landmark selection")

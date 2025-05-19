@@ -7,14 +7,21 @@ def get_id():
     return datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 
-def get_logger():
-    dirpath = "sketchmap-python-logs"
-    os.makedirs(dirpath, exist_ok=True)
+def generate_run_path():
+    res_dirname = "sketchmap-runs"
+    os.makedirs(res_dirname, exist_ok=True)
 
     id = get_id()
-    filename = os.path.join(dirpath, f"logs_{id}.log")
+    run_path = os.path.join(res_dirname, id)
+    os.makedirs(run_path, exist_ok=True)
 
-    print(f"Logs are saved to {filename}")
+    print(f"Results will be saved to {run_path}")
+
+    return run_path
+
+
+def get_logger(save_path: str = "sketchmap-logs"):
+    filename = os.path.join(save_path, f"logs.log")
 
     logging.basicConfig(
         filename=filename,
@@ -26,4 +33,6 @@ def get_logger():
     return logging.getLogger()
 
 
-logger = get_logger()
+RUN_PATH = generate_run_path()
+
+logger = get_logger(RUN_PATH)

@@ -197,7 +197,7 @@ def get_landmark_stat(
         )
 
     with open(stat_filepath, "w") as file:
-        file.write("\nLandmark coverage statistics:\n")
+        file.write("Landmark coverage statistics:\n")
         for k, v in coverage_stats.items():
             file.write(f"{k:<30}: {v:.6f}\n")
 
