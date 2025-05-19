@@ -35,10 +35,13 @@ By default `min-max` selection algorithm is used (currently the only one impleme
 | Option            | Description                                                              |
 | ------------------ | ------------------------------------------------------------------------ |
 | `--hdim-filepath`/ `--P` | Path to input high-dimensional data file (required)                       |
-| `--num`             | Number of landmarks to select (default: 1000)  |
+| `--num`/ `--n`             | Number of landmarks to select (default: 1000)  |
 | `--select-mode`             | Selection mode (currently only "minmax" supported)  |
-| `--save-indices`             | Save original indices of selected landmarks to the first column  |
-| `--compute-weights`             | Calculate Voronoi weights for landmarks. Saved to the last column if true  |
-| `--metric`             | Distance metric ("euclidean", "dot", "pbc", or "sphere")  |
+| `--save-indices` / `--i`             | Save original indices of selected landmarks to the first column  |
 | `--output-filepath`             | Path to save output landmarks  |
+| `--compute-weights`              | Calculate Voronoi weights for landmarks. Saved to the last column if true  |
+| `--metric`             | Distance metric ("euclidean" - default, "dot", "pbc", or "sphere")  |
+| `--period`             | Periodicity for pbc metric  |
+| `--sphere-period`             |  Periodicity for spherical distance metric  |
+| `--numpy`             |  Save in numpy format  |
 
