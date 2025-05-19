@@ -1,36 +1,36 @@
-import csv
-import os
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 import click
 import numpy as np
 import torch
 
-from sklearn.decomposition import PCA
-
-import matplotlib.pyplot as plt
-import numpy as np
-
 # from src.commands.dimred import DimRed, auto_select_parameters
 from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
-from src.commands.histogram import Histogram
-from src.commands.landmarks import run_get_landmarks
+from src.commands.distance_histogram import DistanceHistogram
+from src.commands.landmarks import (
+    run_get_landmarks,
+    verify_landmarks,
+    plot_high_dim_landmarks,
+)
 from src.utils.cli import (
     hdim_filepath,
     high_dimension,
     low_dimension,
     max_distance,
+    metric,
     n_bin,
     num,
     output_filepath,
+    period,
+    save_indices,
     select_mode,
+    sphere_period,
     weighted,
 )
-from src.utils.file import read_file
-from src.utils.logger import logger
-from src.utils.plot import get_analyze_plot
 from src.utils.const import DEVICE
+from src.utils.file import read_file
+from src.utils.logger import get_id, logger
 
 
 @click.group()
@@ -40,20 +40,29 @@ def main():
 
 @main.command()
 @hdim_filepath
-@max_distance
+@metric
+@period
+@sphere_period
 @n_bin
+@max_distance
 @high_dimension
 @output_filepath
 @weighted
 def analyse(
     hdim_filepath: str,
-    max_distance: int,
+    metric: str,
+    period: float,
+    sphere_period: float,
     n_bin: int,
-    high_dimension: Optional[int] = None,
-    output_filepath: str = "analyse_result.csv",
-    weighted: bool = False,
+    max_distance: Optional[int],
+    high_dimension: Optional[int],
+    output_filepath: Optional[str],
+    weighted: Optional[bool],
 ):
     logger.info("Start running 'analyze'")
+
+    params = locals()
+    logger.info(f"Parameters: {params}")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
     points, weights = read_file(hdim_filepath, high_dimension, weighted)
@@ -61,118 +70,33 @@ def analyse(
 
     logger.info(f"Start computing distances")
 
-    # TODO: add param to select metric
-    distance_calculator = DistanceCalculator("euclidean")
+    distance_calculator = DistanceCalculator(metric, period, sphere_period)
 
-    distances, dweights = distance_calculator.pairwise_distances(
-        points, weights, weighted
-    )
+    distances = distance_calculator.pairwise_distances(points, points)
     logger.info(f"Calculated {len(distances)} distances")
 
     logger.info(f"Start creating histogram")
-    max_distance = max_distance if max_distance is not None else np.max(distances)
-    bins = np.linspace(0, max_distance, n_bin + 1)
-    hist = Histogram(bins)
-    hist.add_values(distances, dweights)
 
-    logger.info(f"Start calculating outliers")
-    out_above, out_below = hist.get_outliers()
-    logger.info(f"Fraction outside: {out_above:.6f} {out_below:.6f}")
+    analyzer = DistanceHistogram(n_bin, max_distance)
+    analyzer.analyze_distance(distances)
 
-    logger.info(f"Writing results to {output_filepath}")
-    centers, prob_density_func, widths = hist.get_results()
+    high_dimension = high_dimension or points.shape[0]
+    params = analyzer.suggest_sketchmap_params(dim=high_dimension)
 
-    with open(output_filepath, "w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["center", "pdf", "width"])
-        for center, pdf_val, width in zip(centers, prob_density_func, widths):
-            writer.writerow([f"{center:.6e}", f"{pdf_val:.6e}", f"{width:.6e}"])
+    id = get_id()
+    output_filepath = output_filepath or f"analysis_report_{id}.txt"
+    plot_filepath = f"distance_analysis_{id}.png"
 
-    os.makedirs("results", exist_ok=True)
-    histo_plot_path = os.path.join("results")
-    logger.info(f"Start saving histogram to {histo_plot_path}")
-    get_analyze_plot(output_filepath, histo_plot_path)
+    analyzer.plot_analysis(
+        save_path=plot_filepath, params=params, input_path=hdim_filepath
+    )
+    analyzer.save_analysis_report(
+        output_filepath, params=params, input_path=hdim_filepath
+    )
+
+    logger.info(f"Saving histogram to {output_filepath} and plot to {plot_filepath}")
 
     logger.info("End running 'analyze'")
-
-
-def plot_high_dim_landmarks(
-    points: torch.Tensor,
-    landmarks: torch.Tensor,
-    title: str = "Landmark Selection (PCA)",
-):
-    points_np = points.cpu().numpy()
-    landmarks_np = landmarks.cpu().numpy()
-
-    pca = PCA(n_components=2)
-    points_2d = pca.fit_transform(points_np)
-    landmarks_2d = pca.transform(landmarks_np)
-
-    plt.figure(figsize=(10, 6))
-    plt.scatter(
-        points_2d[:, 0], points_2d[:, 1], c="gray", alpha=0.3, label="Original Points"
-    )
-    plt.scatter(
-        landmarks_2d[:, 0], landmarks_2d[:, 1], c="red", s=20, label="Landmarks"
-    )
-    plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("landmarks.png", dpi=300)
-
-
-def verify_landmarks(
-    points: torch.Tensor, landmarks: torch.Tensor, calculator: DistanceCalculator
-):
-    # 1. verify distances from all points to landmarks
-    point_to_landmark_dists = calculator.pairwise_distances(points, landmarks)
-    min_dists = point_to_landmark_dists.min(dim=1).values
-
-    coverage_stats = {
-        "avg_dist_to_landmark": min_dists.mean().item(),
-        "max_dist_to_landmark": min_dists.max().item(),
-        "min_dist_to_landmark": min_dists.min().item(),
-        "coverage_ratio": min_dists.mean().item()
-        / point_to_landmark_dists.max().item(),
-    }
-
-    # 2. verify distances between landmarks
-    landmark_dists = calculator.pairwise_distances(landmarks)
-
-    # fill diagonal with infinity to ignore self-distances
-    landmark_dists.fill_diagonal_(float("inf"))
-
-    min_landmark_dists = landmark_dists.min(dim=1).values
-    separation_stats = {
-        "min_landmark_separation": min_landmark_dists.min().item(),
-        "avg_landmark_separation": min_landmark_dists.mean().item(),
-        "max_landmark_separation": min_landmark_dists.max().item(),
-        "separation_ratio": min_landmark_dists.min().item()
-        / landmark_dists.max().item(),
-    }
-
-    # 3. check for duplicates or near-duplicates
-    duplicate_threshold = 1e-6
-    num_too_close = (landmark_dists < duplicate_threshold).sum().item() // 2
-    if num_too_close > 0:
-        warning = (
-            f"Found {num_too_close} landmark pairs closer than {duplicate_threshold}"
-        )
-        if logger:
-            logger.warning(warning)
-        else:
-            print(f"Warning: {warning}")
-
-    print("\nLandmark Coverage Statistics:")
-    for k, v in coverage_stats.items():
-        print(f"{k:>25}: {v:.6f}")
-
-    print("\nLandmark Separation Statistics:")
-    for k, v in separation_stats.items():
-        print(f"{k:>25}: {v:.6f}")
-
-    return coverage_stats, separation_stats
 
 
 @main.command()
@@ -181,38 +105,37 @@ def verify_landmarks(
 @select_mode
 @high_dimension
 @output_filepath
+@save_indices
+@metric
+@period
+@sphere_period
 @weighted
-@click.option(
-    "--metric",
-    type=click.Choice(["euclidean", "dot", "pbc"]),
-    default="euclidean",
-    help="Distance metric",
-)
 def select_landmarks(
     hdim_filepath: str,
-    num: int = 1000,
-    select_mode: str = "minmax",
-    high_dimension: Optional[int] = None,
-    output_filepath: str = "high_landmarks.dat",
-    weighted: bool = True,
-    metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
+    num: int,
+    select_mode: str,
+    high_dimension: Optional[int],
+    output_filepath: Optional[str],
+    save_indices: bool,
+    metric: str,
+    period: float,
+    sphere_period: float,
+    weighted: Optional[bool],
 ):
-    weighted = True
     logger.info("Start running 'select-landmarks'")
-    logger.info(f"Params: num={num}, select_mode={select_mode}, weighted={weighted}")
+
+    params = locals()
+    logger.info(f"Parameters: {params}")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
     points_np, weights_np = read_file(hdim_filepath, high_dimension, weighted)
     logger.info(f"Read {len(points_np)} points")
 
-    print("Number of NaN in input points:", np.isnan(points_np.cpu().numpy()).sum())
-    print("Number of NaN in input weights:", np.isnan(weights_np.cpu().numpy()).sum())
-
-    points = torch.tensor(points_np, device=DEVICE)
-    weights = torch.tensor(weights_np, device=DEVICE)
+    points = points_np.clone().detach()
+    weights = weights_np.clone().detach()
 
     unique_points = torch.unique(points, dim=0)
-    print(f"Total points: {len(points)}, Unique points: {len(unique_points)}")
+    logger.info(f"Total points: {len(points)}, unique points: {len(unique_points)}")
 
     logger.info("Start selecting high-landmarks")
 
@@ -223,25 +146,20 @@ def select_landmarks(
         mode=select_mode,
         metric=metric,
         weighted=weighted,
-        # period=period,
-        # sphere_period=sphere_period,
-        #  first_index=args.first_index,
-        #   compute_weights=args.compute_weights,
-        #   weight_gamma=args.weight_gamma,
+        period=period,
+        sphere_period=sphere_period,
     )
 
-    print(
-        f"# {len(landmarks)} landmark points selected out of {len(points)} and chosen by {select_mode}"
+    logger.info(
+        f"{len(landmarks)} landmark points selected out of {len(points)} and chosen by {select_mode}"
     )
 
-    if weighted:
-        weights = landmark_weights.unsqueeze(-1)
-    else:
-        weights = torch.ones(len(landmarks), device=DEVICE).unsqueeze(-1) / len(
-            landmarks
-        )
+    landmark_weights = landmark_weights.unsqueeze(-1)  # shape: (num, 1)
+    combined = torch.cat([landmarks, landmark_weights], dim=-1)
 
-    combined = torch.cat([landmarks, weights], dim=-1)
+    if save_indices:
+        indices = indices.unsqueeze(-1).float()  # shape: (num, 1)
+        combined = torch.cat([indices, combined], dim=-1)  # shape: (num, D+2)
 
     logger.info(f"Saving landmarks to {output_filepath}")
     np.savetxt(output_filepath, combined.cpu().numpy())
@@ -303,10 +221,11 @@ def select_landmarks(
     default="euclidean",
     help="Distance metric",
 )
-@click.option("--sigma-hd", type=float, help="Sigma parameter for high-dim sigmoid")
+@click.option(
+    "--sigma", type=float, help="Sigma parameter for high-dim and low-dim sigmoid"
+)
 @click.option("--a-hd", type=int, help="'a' parameter for high-dim sigmoid")
 @click.option("--b-hd", type=int, help="'b' parameter for high-dim sigmoid")
-@click.option("--sigma-ld", type=float, help="Sigma parameter for low-dim sigmoid")
 @click.option("--a-ld", type=int, help="'a' parameter for low-dim sigmoid")
 @click.option("--b-ld", type=int, help="'b' parameter for low-dim sigmoid")
 @click.option("--grid-width", type=float, help="Grid width for global optimization")
@@ -326,10 +245,9 @@ def dimred(
     gopt_steps: int = 3,
     imix: float = 1.0,
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
-    sigma_hd: Optional[float] = None,
+    sigma: Optional[float] = None,
     a_hd: Optional[int] = None,
     b_hd: Optional[int] = None,
-    sigma_ld: Optional[float] = None,
     a_ld: Optional[int] = None,
     b_ld: Optional[int] = None,
     grid_width: Optional[float] = None,
@@ -375,12 +293,11 @@ def dimred(
     if dot and (period != 0.0):
         raise ValueError("Cannot use periodic options with dot product distance")
 
-    if None in [sigma_hd, a_hd, b_hd, sigma_ld, a_ld, b_ld]:
+    if None in [sigma, a_hd, b_hd, a_ld, b_ld]:
         logger.info("Auto-selecting sigmoid parameters")
-        sigma_hd = sigma_hd or 13.0
+        sigma = sigma or 13.0
         a_hd = a_hd or 4
         b_hd = b_hd or 2
-        sigma_ld = sigma_ld or 13.0
         a_ld = a_ld or 2
         b_ld = b_ld or 2
 
@@ -396,8 +313,8 @@ def dimred(
         fine_points=fine_pts,
     )
 
-    reducer.set_transformation("high", "sigmoid", (sigma_hd, a_hd, b_hd))
-    reducer.set_transformation("low", "sigmoid", (sigma_ld, a_ld, b_ld))
+    reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
+    reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
     try:
         logger.info("Running initial MDS")

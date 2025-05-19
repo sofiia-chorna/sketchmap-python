@@ -23,7 +23,6 @@ def max_distance(func):
     return click.option(
         "--max_distance",
         "--maxd",
-        default=100,
         help="Maximum distance to consider in pairwise distance calculations",
         type=int,
     )(func)
@@ -32,7 +31,7 @@ def max_distance(func):
 def n_bin(func):
     return click.option(
         "--n_bin",
-        default=1000,
+        default=150,
         help="Number of bins to use in the histogram",
         type=int,
     )(func)
@@ -42,7 +41,7 @@ def weighted(func):
     return click.option(
         "--weighted",
         "--w",
-        default=True,
+        default=False,
         is_flag=True,
         help="True if data is weighted",
         type=bool,
@@ -84,4 +83,31 @@ def select_mode(func):
         help="Number of data to select",
         type=click.Choice(["minmax", "random"], case_sensitive=False),
         default="minmax",
+    )(func)
+
+
+def metric(func):
+    return click.option(
+        "--metric",
+        type=click.Choice(["euclidean", "dot", "pbc"]),
+        default="euclidean",
+        help="Distance metric",
+    )(func)
+
+
+def period(func):
+    return click.option(
+        "--period",
+        type=float,
+        default=0.0,
+        help="Required for metric 'pbc'. Defines the lenght of the periodic box",
+    )(func)
+
+
+def sphere_period(func):
+    return click.option(
+        "--sphere_period",
+        type=float,
+        default=0.0,
+        help="Required for metric 'sphere' (sperical distances). Defines the circumference of the sphere",
     )(func)

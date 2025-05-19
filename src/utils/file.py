@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from src.utils.const import DEVICE
+from src.utils.logger import logger
 
 
 def _adjust_dim(points: List[float], dim: Optional[int]):
@@ -17,6 +18,14 @@ def _adjust_dim(points: List[float], dim: Optional[int]):
     return dim
 
 
+def _validate_nan(values: List[float]):
+    if torch.isnan(values).any():
+        logger.warning("Warning: NaN values found! Replacing them with zero")
+        values = torch.nan_to_num(values)
+
+    return values
+
+
 def read_file(
     filepath: str, dim: Optional[int], weighted=False
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -24,6 +33,7 @@ def read_file(
 
     if extention == ".pt":
         data = torch.load(filepath, weights_only=False, map_location=DEVICE)
+
         if isinstance(data, (tuple, list)):
             points = data[0]
             weights = (
@@ -33,35 +43,25 @@ def read_file(
             points = data
             weights = torch.ones(len(points), device=DEVICE)
 
-        if torch.isnan(points).any():
-            print("Warning: NaN values found in points!")
-            points = torch.nan_to_num(points)
-
-        if torch.isnan(weights).any():
-            print("Warning: NaN values found in weights!")
-            weights = torch.nan_to_num(weights)
+        points = _validate_nan(points)
+        weights = _validate_nan(weights)
 
         dim = _adjust_dim(points, dim)
-        print(f"Used highdim-data dimension: {dim}")
+        logger.info(f"Used highdim-data dimension: {dim}")
 
         return points[:, :dim], weights
+
     else:
         data = np.loadtxt(filepath)
-        print(f"Used highdim-data dimension: {dim}")
+        logger.info(f"Used highdim-data dimension: {dim}")
 
         points = data[:, :dim]
-
-        if np.isnan(points).any():
-            print("Warning: NaN values found in points!")
-            points = np.nan_to_num(points)
-
         weights = (
             data[:, dim] if weighted and dim < data.shape[1] else np.ones(len(data))
         )
 
-        if np.isnan(weights).any():
-            print("Warning: NaN values found in weights!")
-            weights = np.nan_to_num(weights)
+        points = _validate_nan(points)
+        weights = _validate_nan(weights)
 
         points = torch.tensor(points, device=DEVICE)
         weights = torch.tensor(weights, device=DEVICE)
