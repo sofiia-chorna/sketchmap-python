@@ -48,6 +48,16 @@ def weighted(func):
     )(func)
 
 
+def numpy(func):
+    return click.option(
+        "--numpy",
+        default=False,
+        is_flag=True,
+        help="If the data should be saved in numpy format",
+        type=bool,
+    )(func)
+
+
 def high_dimension(func):
     return click.option(
         "--high_dimension",

@@ -9,9 +9,9 @@ from src.commands.dimred import DimRed
 from src.commands.distance import DistanceCalculator
 from src.commands.distance_histogram import DistanceHistogram
 from src.commands.landmarks import (
+    plot_high_dim_landmarks,
     run_get_landmarks,
     verify_landmarks,
-    plot_high_dim_landmarks,
 )
 from src.utils.cli import (
     hdim_filepath,
@@ -21,6 +21,7 @@ from src.utils.cli import (
     metric,
     n_bin,
     num,
+    numpy,
     output_filepath,
     period,
     save_indices,
@@ -110,6 +111,7 @@ def analyse(
 @period
 @sphere_period
 @weighted
+@numpy
 def select_landmarks(
     hdim_filepath: str,
     num: int,
@@ -162,7 +164,11 @@ def select_landmarks(
         combined = torch.cat([indices, combined], dim=-1)  # shape: (num, D+2)
 
     logger.info(f"Saving landmarks to {output_filepath}")
-    np.savetxt(output_filepath, combined.cpu().numpy())
+
+    if numpy:
+        np.savetxt(output_filepath, combined.cpu().numpy())
+    else:
+        torch.save(combined, output_filepath)
 
     calculator = DistanceCalculator(metric)
     verify_landmarks(points, landmarks, calculator)
