@@ -95,19 +95,34 @@ class DimRed:
         - a controls the steepness of the rise
         - b controls the asymptotic behavior
         """
-        exponent_ratio = a / b
-        scaling_factor = (2.0**exponent_ratio) - 1  # (2^(a/b) - 1)
-        normalized_x = x / sigma
+        # Cast the scalar parameters to tensors on the same device / dtype as `x`
+        sigma_t = torch.as_tensor(sigma, dtype=x.dtype, device=x.device)
+        a_t = torch.as_tensor(a, dtype=x.dtype, device=x.device)
+        b_t = torch.as_tensor(b, dtype=x.dtype, device=x.device)
 
-        # 1 + scaling_factor * (x / sigma) ^ a
-        transformation_term = 1 + scaling_factor * (normalized_x**a)
+        # ---- common sub-expressions ------------------------------------------------
+        # Scaling factor:  2^{a/b} − 1
+        scaling_factor = torch.pow(2.0, a_t / b_t) - 1.0  # S
 
-        # sigmoid function: 1 - term ^ (-b / a)
-        transformed_distances = 1 - transformation_term ** (-exponent_ratio)
+        # Normalised input:  u = x / σ
+        u = x / sigma_t  # u
 
-        # dy/dx = scaling_factor * (b/ sigma) * (x/sigma)^(a-1) * term^(-b/a - 1)
-        derivative = (
-            scaling_factor * (b / sigma) * (x ** (a - 1)) * (normalized_x ** (a - 1))
+        # Inner term:  T = 1 + S * u^{a}
+        T = 1.0 + scaling_factor * torch.pow(u, a_t)  # T
+
+        # Power used in the outer exponent
+        power = -b_t / a_t  # −b/a
+
+        # ---- function value --------------------------------------------------------
+        S_val = 1.0 - torch.pow(T, power)  # S_{σ,a,b}(x)
+
+        # ---- derivative ------------------------------------------------------------
+        # dS/dx =  (b * S / σ) * u^{a−1} * T^{−b/a − 1}
+        dSdx = (
+            (b_t * scaling_factor)
+            / sigma_t
+            * torch.pow(u, a_t - 1.0)
+            * torch.pow(T, power - 1.0)  # power-1 == −b/a − 1
         )
 
         return transformed_distances, derivative
