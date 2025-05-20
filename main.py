@@ -212,7 +212,7 @@ def select_landmarks(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
 )
 @click.option(
-    "--gopt-steps", type=int, default=3.0, help="Number of global optimization steps"
+    "--gopt-steps", type=int, default=1.0, help="Number of global optimization steps"
 )
 @click.option(
     "--imix", type=float, default=1.0, help="Mixing parameter for stress function"
@@ -225,7 +225,7 @@ def select_landmarks(
 @click.option("--b-hd", type=int, help="'b' parameter for high-dim sigmoid")
 @click.option("--a-ld", type=int, help="'a' parameter for low-dim sigmoid")
 @click.option("--b-ld", type=int, help="'b' parameter for low-dim sigmoid")
-@click.option("--grid-width", type=float, help="Grid width for global optimization")
+@click.option("--grid-width", type=float, default=1.5, help="Grid width for global optimization")
 @click.option("--coarse-pts", type=int, default=21, help="Number of coarse grid points")
 @click.option("--fine-pts", type=int, default=201, help="Number of fine grid points")
 @click.option("--center/--no-center", default=True, help="Center the points")
@@ -327,7 +327,7 @@ def dimred(
                 weights=point_weights,
                 initial_embedding=initial_embedding,
                 preoptimization_steps=preopt_steps,
-                global_optimization_steps=1 if grid_width else 0,
+                global_optimization_steps=gopt_steps if grid_width else 0,
                 interpolation_mix=current_mix,
                 auto_grid=True,
             )
