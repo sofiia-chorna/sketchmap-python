@@ -286,28 +286,12 @@ def dimred(
     center: bool = True,
     verbose: bool = True,
 ):
-    click.echo("Running dimred with the following parameters:")
-    click.echo(f"  highlandmarks_filepath: {highlandmarks_filepath}")
-    click.echo(f"  high_dimension: {high_dimension}")
-    click.echo(f"  low_dimension: {low_dimension}")
-    click.echo(f"  output_filepath: {output_filepath}")
-    click.echo(f"  period: {period}")
-    click.echo(f"  metric: {metric}")
-    click.echo(f"  weighted: {weighted}")
-    click.echo(f"  preopt_steps: {preopt_steps}")
-    click.echo(f"  gopt_steps: {gopt_steps}")
-    click.echo(f"  imix: {imix}")
-    click.echo(f"  grid_width: {grid_width}")
-    click.echo(f"  coarse_pts: {coarse_pts}")
-    click.echo(f"  fine_pts: {fine_pts}")
-    click.echo(f"  center: {center}")
-    click.echo(f"  verbose: {verbose}")
+    logger.info("Start running 'dimred'")
+
+    params = locals()
+    logger.info(f"Parameters: {params}")
 
     data = np.loadtxt(highlandmarks_filepath)
-
-    if np.any(np.isinf(data)) or np.any(np.isnan(data)):
-        logger.warning("Input contains inf/NaN values - cleaning data")
-        data = np.nan_to_num(data)
 
     if weighted:
         points = data[:, :-1]
@@ -315,14 +299,15 @@ def dimred(
     else:
         points = data
         weights = None
-        
-    #if points.shape[1] != high_dimension:
+
+    # if points.shape[1] != high_dimension:
     #    raise ValueError(f"Expected {high_dimension} dimensions, got {points.shape[1]}")
 
     metric = "dot" if dot else "euclidean"
     if dot and (period != 0.0):
         raise ValueError("Cannot use periodic options with dot product distance")
 
+    # TODO: implement autoselection
     if None in [sigma, a_hd, b_hd, a_ld, b_ld]:
         logger.info("Auto-selecting sigmoid parameters")
         sigma = sigma or 7.0
@@ -345,16 +330,11 @@ def dimred(
     if not os.path.exists(f"{output_filepath}.imds"):
         reducer.set_transformation("high", "identity", ())
         reducer.set_transformation("low", "identity", ())
-        
+
         init_points = reducer.fit(
-            X=points,
-            weights=weights,
-            preopt_steps=preopt_steps,
-            gopt_steps=0,
-            imix=0.0
+            X=points, weights=weights, preopt_steps=preopt_steps, gopt_steps=0, imix=0.0
         )
-    np.savetxt(f"{output_filepath}.imds", init_points)
-    
+
     reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
     reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
