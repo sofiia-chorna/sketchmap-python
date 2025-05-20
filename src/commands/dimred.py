@@ -36,6 +36,8 @@ class DimRed:
         self.high_dim_transform = self._identity_transform
         self.low_dim_transform = self._identity_transform
 
+        self._first_stress_call = True
+
         logger.info(
             f"Initialized DimRed with high_dim={high_dim}, low_dim={low_dim}, "
             f"metric={metric}, period={period}, center={center}, verbose={verbose}, device={DEVICE}"
@@ -200,6 +202,21 @@ class DimRed:
 
         # pairwise distances in lowd
         low_dim_distances = torch.cdist(low_dim_embedding, low_dim_embedding)
+
+        if self.verbose and self._first_stress_call:
+            d = low_dim_distances.detach().cpu().numpy()
+            D = high_dim_distances.detach().cpu().numpy()
+
+            logger.info(f"Low-d distances: min={d.min():.4f}, max={d.max():.4f}, mean={d.mean():.4f}")
+            logger.info(f"High-d distances: min={D.min():.4f}, max={D.max():.4f}, mean={D.mean():.4f}")
+
+            logger.info("Initial low-dimentional distances (d):")
+            logger.info(d)
+
+            logger.info("Initial high-dimentional distances (D):")
+            logger.info(D)
+
+            self._first_stress_call = False
 
         # sigmoid transforms
         transformed_high_dim, _ = self.high_dim_transform(high_dim_distances)
