@@ -32,7 +32,6 @@ from src.utils.cli import (
     sphere_period,
     weighted,
 )
-from src.utils.const import DEVICE
 from src.utils.file import read_file
 from src.utils.logger import RUN_PATH, logger
 
@@ -300,6 +299,10 @@ def dimred(
     reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
     try:
+        # TODO: move to param !
+        initial_embedding = np.loadtxt("low_landmarks_original_val.dat")[:, :2]
+
+        """
         logger.info("Running initial MDS")
         initial_embedding = reducer.fit(
             X=data_points,
@@ -309,6 +312,7 @@ def dimred(
             imix=imix,
             auto_grid=False,
         )
+        """
 
         # iterative refinement
 
@@ -319,12 +323,12 @@ def dimred(
             logger.info(f"Refinement iteration {iteration + 1}, mix={current_mix:.2f}")
 
             low_dim_embedding = reducer.fit(
-                X=data_points,
+                data_points=data_points,
                 weights=point_weights,
-                init=initial_embedding,
-                preopt_steps=preopt_steps,
-                gopt_steps=1 if grid_width else 0,
-                imix=current_mix,
+                initial_embedding=initial_embedding,
+                preoptimization_steps=preopt_steps,
+                global_optimization_steps=1 if grid_width else 0,
+                interpolation_mix=current_mix,
                 auto_grid=True,
             )
 
@@ -334,6 +338,8 @@ def dimred(
                 current_mix = max(current_mix, 0.1)
 
             initial_embedding = low_dim_embedding
+
+        print("low_dim_embedding", low_dim_embedding.shape)
 
         if weighted:
             output_data = np.hstack((low_dim_embedding, point_weights.reshape(-1, 1)))

@@ -88,7 +88,7 @@ class DimRed:
         Generalized sigmoid transformation for distance scaling
 
         Implements the function:
-            y(x) = 1 - [1 + (2^(a/b) - 1)*(x / sigma)^a] ^ (-b / a)
+        y(x) = 1 - [1 + (2^(a/b) - 1)*(x / sigma)^a] ^ (-b / a)
 
         where:
         - sigma controls location of so called infection point
@@ -125,7 +125,7 @@ class DimRed:
             * torch.pow(T, power - 1.0)  # power-1 == −b/a − 1
         )
 
-        return transformed_distances, derivative
+        return S_val, dSdx
 
     def _identity_transform(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -598,55 +598,56 @@ class DimRed:
 
     def fit(
         self,
-        X: Union[np.ndarray, torch.Tensor],
+        data_points: Union[np.ndarray, torch.Tensor],
         weights: Optional[Union[np.ndarray, torch.Tensor]] = None,
-        init: Optional[Union[np.ndarray, torch.Tensor]] = None,
-        preopt_steps: int = 100,
-        gopt_steps: int = 0,
-        imix: float = 0.0,
+        initial_embedding: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        preoptimization_steps: int = 100,
+        global_optimization_steps: int = 0,
+        interpolation_mix: float = 0.0,
         learning_rate: float = 0.001,
         auto_grid: bool = True,
-    ):
+    ) -> np.ndarray:
+        """
+        Fit the model to the given data points and return the low-dimentional embedding
+        """
+
         logger.info("Starting fit process")
 
-        X = _to_tensor(X)
+        data_points = _to_tensor(data_points)
         if weights is not None:
             weights = _to_tensor(weights)
 
         if self.center:
             logger.info("Centering the data")
-            X = X - X.mean(dim=0, keepdim=True)
+            data_points = data_points - data_points.mean(dim=0, keepdim=True)
 
-        # compute distance matrix
-        distance_matrix = (
-            X
-            if (self.metric == "dot" and X.shape[0] == X.shape[1])
-            else self._compute_distance_matrix(X, weights)
-        )
-
-        # init lowdim embedding
-        if init is None:
-            logger.info("Computing initial coordinates using classical MDS")
-            init = self._classical_mds(distance_matrix)
+        if self.metric == "dot" and data_points.shape[0] == data_points.shape[1]:
+            distance_matrix = data_points
         else:
-            init = _to_tensor(init)
+            distance_matrix = self._compute_distance_matrix(data_points, weights)
+
+        if initial_embedding is None:
+            logger.info("Computing initial coordinates using classical MDS")
+            initial_embedding = self._classical_mds(distance_matrix)
+        else:
+            initial_embedding = _to_tensor(initial_embedding)
 
         logger.info("Beginning optimization")
 
-        result = self._optimize_embedding(
-            distance_matrix,
-            init,
-            weights,
-            preopt_steps,
-            gopt_steps,
-            imix,
-            learning_rate,
-            auto_grid,
+        optimized_embedding = self._optimize_embedding(
+            high_dim_distances=distance_matrix,
+            initial_embedding=initial_embedding,
+            point_weights=weights,
+            num_preopt_steps=preoptimization_steps,
+            num_global_steps=global_optimization_steps,
+            mixing_ratio=interpolation_mix,
+            learning_rate=learning_rate,
+            adaptive_grid=auto_grid,
         )
 
         logger.info("Finished fit process")
 
-        return result.cpu().numpy()
+        return optimized_embedding.cpu().numpy()
 
 
 def _to_tensor(data, dtype=torch.float32):
