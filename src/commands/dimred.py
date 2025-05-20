@@ -107,10 +107,7 @@ class DimRed:
 
         # dy/dx = scaling_factor * (b/ sigma) * (x/sigma)^(a-1) * term^(-b/a - 1)
         derivative = (
-            scaling_factor
-            * (b / sigma)
-            * (x ** (a - 1))
-            * (normalized_x ** (a - 1))
+            scaling_factor * (b / sigma) * (x ** (a - 1)) * (normalized_x ** (a - 1))
         )
 
         return transformed_distances, derivative
@@ -219,223 +216,370 @@ class DimRed:
 
     def _optimize_embedding(
         self,
-        D: torch.Tensor,
-        init: torch.Tensor,
-        weights: Optional[torch.Tensor],
-        preopt_steps: int,
-        gopt_steps: int,
-        imix: float,
+        high_dim_distances: torch.Tensor,
+        initial_embedding: torch.Tensor,
+        point_weights: Optional[torch.Tensor],
+        num_preopt_steps: int,
+        num_global_steps: int,
+        mixing_ratio: float,
         learning_rate: float,
-        auto_grid: bool,
+        adaptive_grid: bool,
+        seed: int = 42,
     ) -> torch.Tensor:
-        torch.manual_seed(42)
+        """
+        Optimize low-dimentional embedding through two-phase optimization
 
-        N, d = init.shape
-        Y = init.clone().to(DEVICE).detach().requires_grad_(True)
+        Phase 1: local optimization using L-BFGS
+        Phase 2: global grid search with adaptive refinement
+        """
 
-        if weights is None:
-            weights = torch.ones(N, device=DEVICE)
+        torch.manual_seed(seed)
+
+        num_points, embedding_dim = initial_embedding.shape
+        current_embedding = (
+            initial_embedding.clone().to(DEVICE).detach().requires_grad_(True)
+        )
+
+        if point_weights is None:
+            point_weights = torch.ones(num_points, device=DEVICE)
 
         if self.verbose:
-            print("\n=== Starting Optimization ===")
-            print(f"Points: {N}, Dimensions: {d}")
-            print(f"Pre-opt steps: {preopt_steps}, Global steps: {gopt_steps}")
-            print(f"Learning rate: {learning_rate}, Mixing: {imix}")
+            print("=" * 40 + " Optimization configuration " + "=" * 40)
+            print("Points:".ljust(20), num_points)
+            print("Dimensions:".ljust(20), embedding_dim)
+            print("Local steps:".ljust(20), num_preopt_steps)
+            print("Global steps:".ljust(20), num_global_steps)
+            print("Learning rate:".ljust(20), "%.2e" % learning_rate)
+            print("Mixing ratio:".ljust(20), "%.2f" % mixing_ratio)
+            print("=" * 85)
 
-        # ===== Step 1: Local Optimization =====
-        if preopt_steps > 0:
-            if self.verbose:
-                print("\n--- Local Optimization Phase ---")
-                pbar = tqdm(total=preopt_steps, desc="LBFGS Pre-optimization")
-
-            optimizer = torch.optim.LBFGS(
-                [Y],
-                lr=learning_rate,
-                max_iter=preopt_steps,
-                line_search_fn="strong_wolfe",
-                history_size=100,
+        # local optimization
+        if num_preopt_steps > 0:
+            current_embedding = self._run_local_optimization(
+                current_embedding,
+                high_dim_distances,
+                point_weights,
+                mixing_ratio,
+                learning_rate,
+                num_preopt_steps,
             )
 
-            def closure():
-                optimizer.zero_grad(set_to_none=True)
-                loss = self._calculate_stress(Y, D, weights, imix)
-                loss.backward()
-                if self.verbose:
-                    pbar.update(1)
-                    pbar.set_postfix({"loss": f"{loss.item():.6f}"})
-                return loss
+        # global grid search
+        if num_global_steps > 0:
+            current_embedding = self._run_global_search(
+                current_embedding,
+                high_dim_distances,
+                point_weights,
+                mixing_ratio,
+                learning_rate,
+                num_global_steps,
+                adaptive_grid,
+            )
 
-            optimizer.step(closure)
+        return current_embedding
+
+    def _run_local_optimization(
+        self,
+        embedding: torch.Tensor,
+        high_dim_distances: torch.Tensor,
+        weights: torch.Tensor,
+        mixing_ratio: float,
+        learning_rate: float,
+        num_steps: int,
+    ) -> torch.Tensor:
+
+        if self.verbose:
+            print("\n--- Local optimization ---")
+            progress_bar = tqdm(total=num_steps, desc="LBFGS optimization")
+
+        optimizer = torch.optim.LBFGS(
+            [embedding],
+            lr=learning_rate,
+            max_iter=num_steps,
+            line_search_fn="strong_wolfe",
+            history_size=100,
+        )
+
+        def closure():
+            optimizer.zero_grad(set_to_none=True)
+            loss = self._calculate_stress(
+                embedding, high_dim_distances, weights, mixing_ratio
+            )
+            loss.backward()
+
             if self.verbose:
-                pbar.close()
-                with torch.no_grad():
-                    final_loss = self._calculate_stress(Y, D, weights, imix).item()
-                    print(f"Final pre-opt loss: {final_loss:.6f}")
+                progress_bar.update(1)
+                progress_bar.set_postfix({"loss": f"{loss.item():.6f}"})
 
-        Y = Y.detach().requires_grad_(False)
+            return loss
 
-        # ===== Step 2: Global Grid Search =====
-        if gopt_steps > 0:
-            eye_d = torch.eye(d, device=DEVICE)
-            last_loss = float("inf")
-            stagnation_counter = 0
+        optimizer.step(closure)
 
-            #  initial grid width
+        if self.verbose:
+            progress_bar.close()
+
             with torch.no_grad():
-                current_radius = torch.max(torch.norm(Y, dim=1)).item()
-                grid_width = current_radius * 1.2 if auto_grid else self.grid_width
+                final_loss = self._calculate_stress(
+                    embedding, high_dim_distances, weights, mixing_ratio
+                ).item()
+                print(f"Final local loss: {final_loss:.6f}")
+
+        return embedding.detach().requires_grad_(False)
+
+    def _run_global_search(
+        self,
+        embedding: torch.Tensor,
+        high_dim_distances: torch.Tensor,
+        weights: torch.Tensor,
+        mixing_ratio: float,
+        learning_rate: float,
+        num_steps: int,
+        adaptive_grid: bool,
+    ) -> torch.Tensor:
+
+        num_points, embedding_dim = embedding.shape
+        identity_matrix = torch.eye(embedding_dim, device=DEVICE)
+
+        # init grid search params
+        with torch.no_grad():
+            current_radius = torch.max(torch.norm(embedding, dim=1)).item()
+            grid_width = current_radius * 1.2 if adaptive_grid else self.grid_width
+
+            if self.verbose:
+                print(f"\n--- Global optimization ---")
+                print(f"Init grid width: {grid_width:.4f}")
+                progress_bar = tqdm(total=num_steps, desc="Global optimization")
+
+        coarse_grid = torch.empty(
+            (self.coarse_points, num_points, embedding_dim), device=DEVICE
+        )
+        fine_grid = torch.empty(
+            (self.fine_points, num_points, embedding_dim), device=DEVICE
+        )
+
+        last_loss = float("inf")
+        stagnation_count = 0
+
+        for step in range(num_steps):
+            if stagnation_count >= 5:
                 if self.verbose:
-                    print(f"\n--- Global Optimization Phase ---")
-                    print(f"Initial grid width: {grid_width:.4f}")
-                    pbar = tqdm(total=gopt_steps, desc="Global optimization")
+                    print(f"\nEarly stopping at step {step} due to stagnation")
+                break
 
-            test_Y_coarse = torch.empty((self.coarse_points, N, d), device=DEVICE)
-            test_Y_fine = torch.empty((self.fine_points, N, d), device=DEVICE)
+            current_grid_width = grid_width * (1.0 - 0.5 * step / num_steps)
+            points_to_update = self._identify_problem_points(
+                embedding, high_dim_distances, weights, mixing_ratio
+            )
 
-            for global_step in range(gopt_steps):
-                if stagnation_counter >= 5:
-                    if self.verbose:
-                        print(
-                            f"\nEarly stopping at step {global_step} due to stagnation"
-                        )
-                    break
+            updated = self._process_grid_searches(
+                embedding,
+                high_dim_distances,
+                weights,
+                mixing_ratio,
+                points_to_update,
+                identity_matrix,
+                current_grid_width,
+                coarse_grid,
+                fine_grid,
+            )
 
-                current_grid_width = grid_width * (1.0 - 0.5 * global_step / gopt_steps)
+            # final polishing if last step or no updates
+            if step == num_steps - 1 or not updated:
+                embedding = self._polish_embedding(
+                    embedding, high_dim_distances, weights, mixing_ratio, learning_rate
+                )
 
-                # per-point errors
+            stagnation_count, last_loss = self._check_convergence(
+                embedding,
+                high_dim_distances,
+                weights,
+                mixing_ratio,
+                last_loss,
+                stagnation_count,
+                progress_bar,
+                current_grid_width,
+            )
+
+        if self.verbose:
+            progress_bar.close()
+            print(f"\nOptimization completed. Final loss: {last_loss:.6f}")
+
+        return embedding
+
+    def _process_grid_searches(
+        self,
+        embedding: torch.Tensor,
+        high_dim_distances: torch.Tensor,
+        weights: torch.Tensor,
+        mixing_ratio: float,
+        point_indices: torch.Tensor,
+        basis_vectors: torch.Tensor,
+        grid_width: float,
+        coarse_grid: torch.Tensor,
+        fine_grid: torch.Tensor,
+    ) -> bool:
+        """
+        Perform coarse-to-fine grid searches for selected points.
+        Returns whether any points were updated
+        """
+        updated = False
+
+        for point_idx in point_indices:
+            original_point = embedding[point_idx].clone()
+
+            for dim in range(embedding.size(1)):
+                # coarse grid search
+                coarse_offsets = (
+                    torch.linspace(
+                        -grid_width, grid_width, self.coarse_points, device=DEVICE
+                    ).view(-1, 1)
+                    * basis_vectors[dim : dim + 1]
+                )
+
+                coarse_grid[:] = embedding
+                coarse_grid[:, point_idx] += coarse_offsets
+
                 with torch.no_grad():
-                    point_errors = torch.zeros(N, device=DEVICE)
-                    for i in range(N):
-                        point_errors[i] = self._calculate_stress(
-                            Y[i : i + 1], D, weights, imix
-                        )
-
-                    threshold = point_errors.mean() + 0.7 * point_errors.std()
-                    mask = point_errors > threshold
-                    process_points = mask.nonzero().view(-1)
-
-                    if len(process_points) < max(int(0.2 * N), 1):
-                        k = max(int(0.2 * N), 1)
-                        _, process_points = torch.topk(point_errors, k=k)
-
-                    if self.verbose and global_step % 5 == 0:
-                        pbar.write(
-                            f"Step {global_step}: Processing {len(process_points)} points "
-                            f"(threshold: {threshold:.4f})"
-                        )
-
-                updated = False
-
-                for point_idx in tqdm(
-                    process_points.sort().values, desc="Processing points"
-                ):
-                    point_idx = point_idx.item()
-                    original_point = Y[point_idx].clone()
-
-                    for dim in range(d):
-                        # coarse grid search
-                        coarse_vals = torch.linspace(
-                            -current_grid_width,
-                            current_grid_width,
-                            self.coarse_points,
-                            device=DEVICE,
-                        )
-                        offsets = coarse_vals.view(-1, 1) * eye_d[dim : dim + 1]
-
-                        test_Y_coarse[:] = Y
-                        test_Y_coarse[:, point_idx] += offsets
-
-                        with torch.no_grad():
-                            losses = torch.stack(
-                                [
-                                    self._calculate_stress(
-                                        test_Y_coarse[i], D, weights, imix
-                                    )
-                                    for i in range(self.coarse_points)
-                                ]
+                    coarse_losses = torch.stack(
+                        [
+                            self._calculate_stress(
+                                coarse_grid[i],
+                                high_dim_distances,
+                                weights,
+                                mixing_ratio,
                             )
-
-                        best_idx = losses.argmin()
-                        best_offset = coarse_vals[best_idx]
-
-                        # fine grid search
-                        fine_start = max(
-                            best_offset - current_grid_width / 10, -current_grid_width
-                        )
-                        fine_end = min(
-                            best_offset + current_grid_width / 10, current_grid_width
-                        )
-                        fine_vals = torch.linspace(
-                            fine_start, fine_end, self.fine_points, device=DEVICE
-                        )
-                        offsets = fine_vals.view(-1, 1) * eye_d[dim : dim + 1]
-
-                        test_Y_fine[:] = Y
-                        test_Y_fine[:, point_idx] += offsets
-
-                        with torch.no_grad():
-                            losses = torch.stack(
-                                [
-                                    self._calculate_stress(
-                                        test_Y_fine[i], D, weights, imix
-                                    )
-                                    for i in range(self.fine_points)
-                                ]
-                            )
-
-                        best_fine_idx = losses.argmin()
-                        new_point = original_point + offsets[best_fine_idx]
-
-                        if not torch.allclose(Y[point_idx], new_point, rtol=1e-6):
-                            Y[point_idx] = new_point
-                            updated = True
-
-                # final polishing
-                if global_step == gopt_steps - 1 or not updated:
-                    if self.verbose:
-                        pbar.write(f"Step {global_step}: final polishing with LBFGS")
-
-                    Y = Y.detach().requires_grad_(True)
-                    optimizer = torch.optim.LBFGS(
-                        [Y],
-                        lr=learning_rate * 0.1,
-                        max_iter=50,
-                        line_search_fn="strong_wolfe",
+                            for i in range(self.coarse_points)
+                        ]
                     )
 
-                    def polish_closure():
-                        optimizer.zero_grad(set_to_none=True)
-                        loss = self._calculate_stress(Y, D, weights, imix)
-                        loss.backward()
-                        return loss
+                best_coarse_id = coarse_losses.argmin()
+                best_offset = coarse_offsets[best_coarse_id, 0]
 
-                    optimizer.step(polish_closure)
-                    Y = Y.detach().requires_grad_(False)
+                # fine grid search around best coarse result
+                fine_start = max(best_offset - grid_width / 10, -grid_width)
+                fine_end = min(best_offset + grid_width / 10, grid_width)
+                fine_offsets = (
+                    torch.linspace(
+                        fine_start, fine_end, self.fine_points, device=DEVICE
+                    ).view(-1, 1)
+                    * basis_vectors[dim : dim + 1]
+                )
 
-                # stagnation check
+                fine_grid[:] = embedding
+                fine_grid[:, point_idx] += fine_offsets
+
                 with torch.no_grad():
-                    current_loss = self._calculate_stress(Y, D, weights, imix).item()
-                    if abs(last_loss - current_loss) < 1e-5:
-                        stagnation_counter += 1
-                    else:
-                        stagnation_counter = 0
-                    last_loss = current_loss
+                    fine_losses = torch.stack(
+                        [
+                            self._calculate_stress(
+                                fine_grid[i], high_dim_distances, weights, mixing_ratio
+                            )
+                            for i in range(self.fine_points)
+                        ]
+                    )
 
-                    if self.verbose:
-                        pbar.update(1)
-                        pbar.set_postfix(
-                            {
-                                "loss": f"{current_loss:.6f}",
-                                "grid": f"{current_grid_width:.4f}",
-                                "stagnation": stagnation_counter,
-                            }
-                        )
+                best_fine_idx = fine_losses.argmin()
+                new_position = original_point + fine_offsets[best_fine_idx]
+
+                # update if significantly improved
+                if not torch.allclose(embedding[point_idx], new_position, rtol=1e-6):
+                    embedding[point_idx] = new_position
+                    updated = True
+
+        return updated
+
+    def _identify_problem_points(
+        self,
+        embedding: torch.Tensor,
+        high_dim_distances: torch.Tensor,
+        weights: torch.Tensor,
+        mixing_ratio: float,
+        min_points_frac: float = 0.2,
+    ) -> torch.Tensor:
+        """
+        Identify points contributing most to the stress for targeted refinement
+        """
+        with torch.no_grad():
+            # calculate per-point stress contributions
+            point_stresses = torch.zeros(embedding.size(0), device=DEVICE)
+
+            for i in range(embedding.size(0)):
+                point_stresses[i] = self._calculate_stress(
+                    embedding[i : i + 1], high_dim_distances, weights, mixing_ratio
+                )
+
+            stress_threshold = point_stresses.mean() + 0.7 * point_stresses.std()
+            problem_mask = point_stresses > stress_threshold
+
+            min_points = max(int(min_points_frac * embedding.size(0)), 1)
+
+            if problem_mask.sum() < min_points:
+                _, problem_indices = torch.topk(point_stresses, k=min_points)
+                return problem_indices
+
+            return problem_mask.nonzero().view(-1)
+
+    def _polish_embedding(
+        self,
+        embedding: torch.Tensor,
+        high_dim_distances: torch.Tensor,
+        weights: torch.Tensor,
+        mixing_ratio: float,
+        learning_rate: float,
+    ) -> torch.Tensor:
+        """Final refinement using L-BFGS optimization"""
+
+        logger.info("Running final L-BFGS polishing step")
+
+        embed = embedding.detach().requires_grad_(True)
+        optimizer = torch.optim.LBFGS(
+            [embed], lr=learning_rate * 0.1, max_iter=50, line_search_fn="strong_wolfe"
+        )
+
+        def closure():
+            optimizer.zero_grad(set_to_none=True)
+            loss = self._calculate_stress(
+                embed, high_dim_distances, weights, mixing_ratio
+            )
+            loss.backward()
+            return loss
+
+        optimizer.step(closure)
+        return embed.detach().requires_grad_(False)
+
+    def _check_convergence(
+        self,
+        embedding: torch.Tensor,
+        high_dim_distances: torch.Tensor,
+        weights: torch.Tensor,
+        mixing_ratio: float,
+        previous_loss: float,
+        stagnation_count: int,
+        progress_bar: tqdm,
+        current_grid_width: float,
+    ) -> Tuple[int, float]:
+
+        with torch.no_grad():
+            current_loss = self._calculate_stress(
+                embedding, high_dim_distances, weights, mixing_ratio
+            ).item()
+
+            if abs(previous_loss - current_loss) < 1e-5:
+                stagnation_count += 1
+            else:
+                stagnation_count = 0
 
             if self.verbose:
-                pbar.close()
-                print(f"\nOptimization completed. Final loss: {current_loss:.6f}")
+                progress_bar.update(1)
+                progress_bar.set_postfix(
+                    {
+                        "loss": f"{current_loss:.6f}",
+                        "grid_width": f"{current_grid_width:.4f}",
+                        "stagnation": stagnation_count,
+                    }
+                )
 
-        return Y
+        return stagnation_count, current_loss
 
     def fit(
         self,
