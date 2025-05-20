@@ -69,7 +69,7 @@ def analyse(
     logger.info(f"Parameters: {params}")
 
     logger.info(f"Start reading highdim file: {hdim_filepath}")
-    points, weights = read_file(hdim_filepath, high_dimension, weighted)
+    points, _weights = read_file(hdim_filepath, high_dimension, weighted)
     logger.info(f"Read {len(points)} points")
 
     logger.info(f"Start computing distances")
@@ -315,9 +315,9 @@ def dimred(
     else:
         points = data
         weights = None
-
-    if points.shape[1] != high_dimension:
-        raise ValueError(f"Expected {high_dimension} dimensions, got {points.shape[1]}")
+        
+    #if points.shape[1] != high_dimension:
+    #    raise ValueError(f"Expected {high_dimension} dimensions, got {points.shape[1]}")
 
     metric = "dot" if dot else "euclidean"
     if dot and (period != 0.0):
@@ -325,7 +325,7 @@ def dimred(
 
     if None in [sigma, a_hd, b_hd, a_ld, b_ld]:
         logger.info("Auto-selecting sigmoid parameters")
-        sigma = sigma or 13.0
+        sigma = sigma or 7.0
         a_hd = a_hd or 4
         b_hd = b_hd or 2
         a_ld = a_ld or 2
@@ -342,7 +342,19 @@ def dimred(
         coarse_points=coarse_pts,
         fine_points=fine_pts,
     )
-
+    if not os.path.exists(f"{output_filepath}.imds"):
+        reducer.set_transformation("high", "identity", ())
+        reducer.set_transformation("low", "identity", ())
+        
+        init_points = reducer.fit(
+            X=points,
+            weights=weights,
+            preopt_steps=preopt_steps,
+            gopt_steps=0,
+            imix=0.0
+        )
+    np.savetxt(f"{output_filepath}.imds", init_points)
+    
     reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
     reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 

@@ -58,6 +58,8 @@ class DimRed:
             if len(params) != 3:
                 raise ValueError("Sigmoid function requires 3 parameters (sigma, a, b)")
             func = lambda x: self._sigmoid_function(x, *params)
+        elif fun_type == "identity":
+            func = lambda x: self._identity_function(x)
         else:
             raise ValueError(f"Unknown function type: {fun_type}")
 
@@ -67,17 +69,9 @@ class DimRed:
             self.tfun_ld = func
 
     def _sigmoid_function(self, x, sigma, a, b):
-        sigma = torch.tensor(sigma, device=DEVICE)
-        a = torch.tensor(a, device=DEVICE)
-        b = torch.tensor(b, device=DEVICE)
-
-        y = 1 / (1 + (x / sigma) ** a) ** b
-        dy = -a * b * (x / sigma) ** (a - 1) * y ** (1 + 1 / b) / sigma
-        # C++: 1 - (1 + (2^(a/b) - 1)(x/s)^a)^(-b/a)
-        # term = 1 + (2.0 ** (a / b) - 1) * (x / sigma) ** a
-        # y = 1 - term ** (-b / a)
-        # dy = (2.0 ** (a / b) - 1) * (b / sigma) * (x / sigma) ** (a - 1) * term ** (-b / a - 1)
-
+        term = 1 + (2.0 ** (a / b) - 1) * (x / sigma) ** a
+        y = 1 - term ** (-b / a)
+        dy = (2.0 ** (a / b) - 1) * (b / sigma) * (x / sigma) ** (a - 1) * term ** (-b / a - 1)
         return y, dy
 
     def _to_tensor(self, data, dtype=torch.float32):
@@ -108,25 +102,19 @@ class DimRed:
         else:
             raise ValueError(f"Unknown metric: {self.metric}")
 
-    def _classical_mds(self, D: torch.Tensor) -> torch.Tensor:
-        logger.info("Performing classical MDS")
+    def _classical_mds(self, D):
+        D = D.cpu()
+
         n = D.shape[0]
-
-        # create centering matrix H
-        H = torch.eye(n, device=DEVICE) - torch.ones((n, n), device=DEVICE) / n
-
-        # double-center the squared distance matrix
+        H = torch.eye(n) - torch.ones((n, n)) / n
         B = -0.5 * H @ (D**2) @ H
 
-        # eigendecomposition
+        # eigh with specific sorting
         vals, vecs = torch.linalg.eigh(B)
-        idx = torch.argsort(vals, descending=True)[: self.low_dim]
+        idx = torch.argsort(vals.abs(), descending=True)[:self.low_dim]
 
-        logger.info(f"Classical MDS eigenvalues: {vals[idx].cpu().numpy()}")
-
-        # scaled eigenvectors
-        return vecs[:, idx] * torch.sqrt(vals[idx])
-        #return vecs[:, idx]
+       # return vecs[:, idx] * torch.sqrt(vals[idx].abs())
+        return vecs[:, idx]
 
     def _stress_function(
         self,
@@ -222,7 +210,7 @@ class DimRed:
             last_loss = float("inf")
             stagnation_counter = 0
 
-            # Calculate initial grid width
+            #  initial grid width
             with torch.no_grad():
                 current_radius = torch.max(torch.norm(Y, dim=1)).item()
                 grid_width = current_radius * 1.2 if auto_grid else self.grid_width
@@ -231,7 +219,6 @@ class DimRed:
                     print(f"Initial grid width: {grid_width:.4f}")
                     pbar = tqdm(total=gopt_steps, desc="Global optimization")
 
-            # Pre-allocate memory for grid searches
             test_Y_coarse = torch.empty((self.coarse_points, N, d), device=device)
             test_Y_fine = torch.empty((self.fine_points, N, d), device=device)
 
@@ -245,7 +232,7 @@ class DimRed:
 
                 current_grid_width = grid_width * (1.0 - 0.5 * global_step / gopt_steps)
 
-                # Compute per-point errors
+                # per-point errors
                 with torch.no_grad():
                     point_errors = torch.zeros(N, device=device)
                     for i in range(N):
@@ -276,7 +263,7 @@ class DimRed:
                     original_point = Y[point_idx].clone()
 
                     for dim in range(d):
-                        # Coarse grid search
+                        # coarse grid search
                         coarse_vals = torch.linspace(
                             -current_grid_width,
                             current_grid_width,
@@ -301,7 +288,7 @@ class DimRed:
                         best_idx = losses.argmin()
                         best_offset = coarse_vals[best_idx]
 
-                        # Fine grid search
+                        # fine grid search
                         fine_start = max(
                             best_offset - current_grid_width / 10, -current_grid_width
                         )
@@ -333,10 +320,10 @@ class DimRed:
                             Y[point_idx] = new_point
                             updated = True
 
-                # Final polishing
+                # final polishing
                 if global_step == gopt_steps - 1 or not updated:
                     if self.verbose:
-                        pbar.write(f"Step {global_step}: Final polishing with LBFGS")
+                        pbar.write(f"Step {global_step}: final polishing with LBFGS")
 
                     Y = Y.detach().requires_grad_(True)
                     optimizer = torch.optim.LBFGS(
@@ -355,7 +342,7 @@ class DimRed:
                     optimizer.step(polish_closure)
                     Y = Y.detach().requires_grad_(False)
 
-                # Stagnation check
+                # stagnation check
                 with torch.no_grad():
                     current_loss = self._stress_function(Y, D, weights, imix).item()
                     if abs(last_loss - current_loss) < 1e-5:
