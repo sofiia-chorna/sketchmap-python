@@ -33,16 +33,13 @@ class DimRed:
         self.coarse_points = coarse_points
         self.fine_points = fine_points
 
-        self.high_dim_transform = self._identity_function
-        self.low_dim_transform = self._identity_function
+        self.high_dim_transform = self._identity_transform
+        self.low_dim_transform = self._identity_transform
 
         logger.info(
             f"Initialized DimRed with high_dim={high_dim}, low_dim={low_dim}, "
             f"metric={metric}, period={period}, center={center}, verbose={verbose}, device={DEVICE}"
         )
-
-    def _identity_function(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        return x, torch.ones_like(x)
 
     def set_transformation(
         self,
@@ -84,28 +81,47 @@ class DimRed:
             case _:
                 raise ValueError(f"Invalid space: {space}. Must be 'high' or 'low'")
 
-    def _sigmoid_transform(self, x, sigma, a, b):
-        # generalized sigmoid
-        # TODO: check the plot
+    def _sigmoid_transform(
+        self, x: torch.Tensor, sigma: float, a: float, b: float
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generalized sigmoid transformation for distance scaling
 
-        term = 1 + (2.0 ** (a / b) - 1) * (x / sigma) ** a
-        y = 1 - term ** (-b / a)
-        dy = (
-            (2.0 ** (a / b) - 1)
+        Implements the function:
+            y(x) = 1 - [1 + (2^(a/b) - 1)*(x / sigma)^a] ^ (-b / a)
+
+        where:
+        - sigma controls location of so called infection point
+        - a controls the steepness of the rise
+        - b controls the asymptotic behavior
+        """
+        exponent_ratio = a / b
+        scaling_factor = (2.0**exponent_ratio) - 1  # (2^(a/b) - 1)
+        normalized_x = x / sigma
+
+        # 1 + scaling_factor * (x / sigma) ^ a
+        transformation_term = 1 + scaling_factor * (normalized_x**a)
+
+        # sigmoid function: 1 - term ^ (-b / a)
+        transformed_distances = 1 - transformation_term ** (-exponent_ratio)
+
+        # dy/dx = scaling_factor * (b/ sigma) * (x/sigma)^(a-1) * term^(-b/a - 1)
+        derivative = (
+            scaling_factor
             * (b / sigma)
-            * (x / sigma) ** (a - 1)
-            * term ** (-b / a - 1)
+            * (x ** (a - 1))
+            * (normalized_x ** (a - 1))
         )
-        return y, dy
 
-    def _to_tensor(self, data, dtype=torch.float32):
-        if isinstance(data, torch.Tensor):
-            return data.to(device=DEVICE, dtype=dtype)
+        return transformed_distances, derivative
 
-        if isinstance(data, np.ndarray) or isinstance(data, list):
-            return torch.tensor(data, device=DEVICE, dtype=dtype)
+    def _identity_transform(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Identity transformation ("pass-through") function
 
-        raise TypeError(f"Cannot convert {type(data)} to torch.Tensor !!")
+        Returns the input distances unchanged along with derivatives of 1 (no scaling on gradients during optimization)
+        """
+        return x, torch.ones_like(x)
 
     def _compute_distance_matrix(
         self, X: torch.Tensor, weights: Optional[torch.Tensor] = None
@@ -434,9 +450,9 @@ class DimRed:
     ):
         logger.info("Starting fit process")
 
-        X = self._to_tensor(X)
+        X = _to_tensor(X)
         if weights is not None:
-            weights = self._to_tensor(weights)
+            weights = _to_tensor(weights)
 
         if self.center:
             logger.info("Centering the data")
@@ -454,7 +470,7 @@ class DimRed:
             logger.info("Computing initial coordinates using classical MDS")
             init = self._classical_mds(distance_matrix)
         else:
-            init = self._to_tensor(init)
+            init = _to_tensor(init)
 
         logger.info("Beginning optimization")
 
@@ -472,3 +488,14 @@ class DimRed:
         logger.info("Finished fit process")
 
         return result.cpu().numpy()
+
+
+def _to_tensor(data, dtype=torch.float32):
+
+    if isinstance(data, torch.Tensor):
+        return data.to(device=DEVICE, dtype=dtype)
+
+    if isinstance(data, np.ndarray) or isinstance(data, list):
+        return torch.tensor(data, device=DEVICE, dtype=dtype)
+
+    raise TypeError(f"Cannot convert {type(data)} to torch.Tensor !")
