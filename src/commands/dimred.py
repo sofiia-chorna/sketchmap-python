@@ -33,8 +33,8 @@ class DimRed:
         self.coarse_points = coarse_points
         self.fine_points = fine_points
 
-        self.tfun_hd = self._identity_function
-        self.tfun_ld = self._identity_function
+        self.high_dim_transform = self._identity_function
+        self.low_dim_transform = self._identity_function
 
         logger.info(
             f"Initialized DimRed with high_dim={high_dim}, low_dim={low_dim}, "
@@ -47,34 +47,44 @@ class DimRed:
     def set_transformation(
         self,
         space: Literal["high", "low"],
-        fun_type: Literal["identity", "sigmoid"],
-        params: Tuple[float, ...],
-    ):
+        transform_type: Literal["identity", "sigmoid"],
+        parameters: Tuple[float, ...],
+    ) -> None:
+        """
+        Configure the distance transformation function for either high or low dimensional space.
+        """
         logger.info(
-            f"Setting {space}-dim transformation to {fun_type} with params={params}"
+            f"Configuring {space}-dim transform: "
+            f"type={transform_type}, parameters={parameters}"
         )
 
-        match fun_type:
+        match transform_type:
             case "sigmoid":
-                func = self._identity_function
-                if len(params) != 3:
+                if len(parameters) != 3:
                     raise ValueError(
-                        "Sigmoid function requires 3 parameters (sigma, a, b)"
+                        "Sigmoid transform requires exactly 3 parameters: "
+                        "(sigma, a, b)"
                     )
-                func = lambda x: self._sigmoid_function(x, *params)
+                transform_func = lambda x: self._sigmoid_transform(x, *parameters)
 
             case "identity":
-                func = lambda x: self._identity_function(x)
+                transform_func = self._identity_transform
 
             case _:
-                raise ValueError(f"Unknown function type: {fun_type}")
+                raise ValueError(
+                    f"Unknown transform type: {transform_type}. "
+                    f"Must be 'identity' or 'sigmoid'"
+                )
 
-        if space == "high":
-            self.tfun_hd = func
-        else:
-            self.tfun_ld = func
+        match space:
+            case "high":
+                self.high_dim_transform = transform_func
+            case "low":
+                self.low_dim_transform = transform_func
+            case _:
+                raise ValueError(f"Invalid space: {space}. Must be 'high' or 'low'")
 
-    def _sigmoid_function(self, x, sigma, a, b):
+    def _sigmoid_transform(self, x, sigma, a, b):
         # generalized sigmoid
         # TODO: check the plot
 
@@ -145,35 +155,51 @@ class DimRed:
         # return eigenvectors[:, id] * torch.sqrt(eigenvalues[id].abs())
         return eigenvectors[:, id]
 
-    def _stress_function(
+    def _calculate_stress(
         self,
-        Y: torch.Tensor,
-        D: torch.Tensor,
+        low_dim_embedding: torch.Tensor,
+        high_dim_distances: torch.Tensor,
         weights: torch.Tensor,
-        imix: float = 0.0,
+        mixing_ratio: float = 0.0,
     ) -> torch.Tensor:
-        # compute pairwise distances in the lowdim space
-        d = torch.cdist(Y, Y)
+        """
+        Calculate the stress between high-dim and low-dim distances
 
-        # apply transformations
-        fD, _dfD = self.tfun_hd(D)
-        fd, _dfd = self.tfun_ld(d)
+        It retutrn a combined stress value to minimize:
+        1. direct distance difference (D - d)
+        2. transformed distance difference (f(D) - f(d))
+        """
 
-        # calculate stress components
-        chi_id = torch.sum(weights * (D - d) ** 2)
-        chi_fun = torch.sum(weights * (fD - fd) ** 2)
-        # chi_id = torch.sum((fD - d) ** 2)
-        # chi_fun = torch.sum((fD - fd) ** 2)
+        # pairwise distances in lowd
+        low_dim_distances = torch.cdist(low_dim_embedding, low_dim_embedding)
 
-        # combine stresses
-        stress = imix * chi_id + (1 - imix) * chi_fun
+        # sigmoid transforms
+        transformed_high_dim, _ = self.high_dim_transform(high_dim_distances)
+        transformed_low_dim, _ = self.low_dim_transform(low_dim_distances)
+
+        # caclulate both components of the stress function
+        direct_stress = torch.sum(
+            weights * (high_dim_distances - low_dim_distances) ** 2
+        )
+        transformed_stress = torch.sum(
+            weights * (transformed_high_dim - transformed_low_dim) ** 2
+        )
+
+        # combine stresses using the mixing ratio
+        # when mixing_ratio = 1 : use only direct distances
+        # when mixing_ratio = 0 : use only transformed distances
+        combined_stress = (
+            mixing_ratio * direct_stress + (1 - mixing_ratio) * transformed_stress
+        )
 
         if self.verbose:
             logger.info(
-                f"Stress: chi_id={chi_id.item():.4f}, chi_fun={chi_fun.item():.4f}, total={stress.item():.4f}"
+                f"Stress components - direct: {direct_stress.item():.4f}, "
+                f"transformed: {transformed_stress.item():.4f}, "
+                f"total: {combined_stress.item():.4f}"
             )
 
-        return stress
+        return combined_stress
 
     def _optimize_embedding(
         self,
@@ -188,12 +214,11 @@ class DimRed:
     ) -> torch.Tensor:
         torch.manual_seed(42)
 
-        device = D.device
         N, d = init.shape
-        Y = init.clone().to(device).detach().requires_grad_(True)
+        Y = init.clone().to(DEVICE).detach().requires_grad_(True)
 
         if weights is None:
-            weights = torch.ones(N, device=device)
+            weights = torch.ones(N, device=DEVICE)
 
         if self.verbose:
             print("\n=== Starting Optimization ===")
@@ -217,7 +242,7 @@ class DimRed:
 
             def closure():
                 optimizer.zero_grad(set_to_none=True)
-                loss = self._stress_function(Y, D, weights, imix)
+                loss = self._calculate_stress(Y, D, weights, imix)
                 loss.backward()
                 if self.verbose:
                     pbar.update(1)
@@ -228,14 +253,14 @@ class DimRed:
             if self.verbose:
                 pbar.close()
                 with torch.no_grad():
-                    final_loss = self._stress_function(Y, D, weights, imix).item()
+                    final_loss = self._calculate_stress(Y, D, weights, imix).item()
                     print(f"Final pre-opt loss: {final_loss:.6f}")
 
         Y = Y.detach().requires_grad_(False)
 
         # ===== Step 2: Global Grid Search =====
         if gopt_steps > 0:
-            eye_d = torch.eye(d, device=device)
+            eye_d = torch.eye(d, device=DEVICE)
             last_loss = float("inf")
             stagnation_counter = 0
 
@@ -248,8 +273,8 @@ class DimRed:
                     print(f"Initial grid width: {grid_width:.4f}")
                     pbar = tqdm(total=gopt_steps, desc="Global optimization")
 
-            test_Y_coarse = torch.empty((self.coarse_points, N, d), device=device)
-            test_Y_fine = torch.empty((self.fine_points, N, d), device=device)
+            test_Y_coarse = torch.empty((self.coarse_points, N, d), device=DEVICE)
+            test_Y_fine = torch.empty((self.fine_points, N, d), device=DEVICE)
 
             for global_step in range(gopt_steps):
                 if stagnation_counter >= 5:
@@ -263,9 +288,9 @@ class DimRed:
 
                 # per-point errors
                 with torch.no_grad():
-                    point_errors = torch.zeros(N, device=device)
+                    point_errors = torch.zeros(N, device=DEVICE)
                     for i in range(N):
-                        point_errors[i] = self._stress_function(
+                        point_errors[i] = self._calculate_stress(
                             Y[i : i + 1], D, weights, imix
                         )
 
@@ -297,7 +322,7 @@ class DimRed:
                             -current_grid_width,
                             current_grid_width,
                             self.coarse_points,
-                            device=device,
+                            device=DEVICE,
                         )
                         offsets = coarse_vals.view(-1, 1) * eye_d[dim : dim + 1]
 
@@ -307,7 +332,7 @@ class DimRed:
                         with torch.no_grad():
                             losses = torch.stack(
                                 [
-                                    self._stress_function(
+                                    self._calculate_stress(
                                         test_Y_coarse[i], D, weights, imix
                                     )
                                     for i in range(self.coarse_points)
@@ -325,7 +350,7 @@ class DimRed:
                             best_offset + current_grid_width / 10, current_grid_width
                         )
                         fine_vals = torch.linspace(
-                            fine_start, fine_end, self.fine_points, device=device
+                            fine_start, fine_end, self.fine_points, device=DEVICE
                         )
                         offsets = fine_vals.view(-1, 1) * eye_d[dim : dim + 1]
 
@@ -335,7 +360,7 @@ class DimRed:
                         with torch.no_grad():
                             losses = torch.stack(
                                 [
-                                    self._stress_function(
+                                    self._calculate_stress(
                                         test_Y_fine[i], D, weights, imix
                                     )
                                     for i in range(self.fine_points)
@@ -364,7 +389,7 @@ class DimRed:
 
                     def polish_closure():
                         optimizer.zero_grad(set_to_none=True)
-                        loss = self._stress_function(Y, D, weights, imix)
+                        loss = self._calculate_stress(Y, D, weights, imix)
                         loss.backward()
                         return loss
 
@@ -373,7 +398,7 @@ class DimRed:
 
                 # stagnation check
                 with torch.no_grad():
-                    current_loss = self._stress_function(Y, D, weights, imix).item()
+                    current_loss = self._calculate_stress(Y, D, weights, imix).item()
                     if abs(last_loss - current_loss) < 1e-5:
                         stagnation_counter += 1
                     else:
