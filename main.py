@@ -202,39 +202,12 @@ def select_landmarks(
 
 
 @main.command()
-@click.option(
-    "--highlandmarks_filepath",
-    type=click.Path(exists=True),
-    required=True,
-    help="Path to file with selected high landmarks",
-)
-@click.option(
-    "--high-dimension",
-    "-D",
-    type=int,
-    required=True,
-    help="Dimensionality of input space",
-)
-@click.option(
-    "--low-dimension", "-d", type=int, default=3, help="Dimensionality of output space"
-)
-@click.option(
-    "--output",
-    "-o",
-    "output_filepath",
-    default="low_landmarks.dat",
-    help="Output file path",
-)
-@click.option(
-    "--period",
-    "-pi",
-    type=float,
-    default=0.0,
-    help="Periodicity for PBC (0 for non-periodic)",
-)
-@click.option(
-    "--weighted/--no-weighted", default=False, help="Use weights from input file"
-)
+@hdim_filepath
+@high_dimension
+@low_dimension
+@output_filepath
+@period
+@weighted
 @click.option("--dot", is_flag=True, help="Use dot product distance")
 @click.option(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
@@ -245,12 +218,7 @@ def select_landmarks(
 @click.option(
     "--imix", type=float, default=1.0, help="Mixing parameter for stress function"
 )
-@click.option(
-    "--metric",
-    type=click.Choice(["euclidean", "dot", "pbc"]),
-    default="euclidean",
-    help="Distance metric",
-)
+@metric
 @click.option(
     "--sigma", type=float, help="Sigma parameter for high-dim and low-dim sigmoid"
 )
@@ -262,12 +230,12 @@ def select_landmarks(
 @click.option("--coarse-pts", type=int, default=21, help="Number of coarse grid points")
 @click.option("--fine-pts", type=int, default=201, help="Number of fine grid points")
 @click.option("--center/--no-center", default=True, help="Center the points")
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option("--verbose", "-v", is_flag=True)
 def dimred(
-    highlandmarks_filepath: str,
+    hdim_filepath: str,
     high_dimension: int,
     low_dimension: int = 3,
-    output_filepath: str = "low_landmarks.dat",
+    output_filepath: str = "low_dimension.dat",
     period: float = 0.0,
     weighted: bool = False,
     dot: bool = False,
@@ -291,25 +259,25 @@ def dimred(
     params = locals()
     logger.info(f"Parameters: {params}")
 
-    data = np.loadtxt(highlandmarks_filepath)
+    raw_data = np.loadtxt(hdim_filepath)
 
     if weighted:
-        points = data[:, :-1]
-        weights = data[:, -1]
+        data_points = raw_data[:, :-1]
+        point_weights = raw_data[:, -1]
     else:
-        points = data
-        weights = None
-
-    # if points.shape[1] != high_dimension:
-    #    raise ValueError(f"Expected {high_dimension} dimensions, got {points.shape[1]}")
+        data_points = raw_data
+        point_weights = None
 
     metric = "dot" if dot else "euclidean"
-    if dot and (period != 0.0):
-        raise ValueError("Cannot use periodic options with dot product distance")
 
-    # TODO: implement autoselection
-    if None in [sigma, a_hd, b_hd, a_ld, b_ld]:
-        logger.info("Auto-selecting sigmoid parameters")
+    if None in [
+        sigma,
+        a_hd,
+        b_hd,
+        a_ld,
+        b_ld,
+    ]:
+        # TODO implement autoselection
         sigma = sigma or 7.0
         a_hd = a_hd or 4
         b_hd = b_hd or 2
@@ -327,22 +295,15 @@ def dimred(
         coarse_points=coarse_pts,
         fine_points=fine_pts,
     )
-    if not os.path.exists(f"{output_filepath}.imds"):
-        reducer.set_transformation("high", "identity", ())
-        reducer.set_transformation("low", "identity", ())
-
-        init_points = reducer.fit(
-            X=points, weights=weights, preopt_steps=preopt_steps, gopt_steps=0, imix=0.0
-        )
 
     reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
     reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
     try:
         logger.info("Running initial MDS")
-        init_points = reducer.fit(
-            X=points,
-            weights=weights,
+        initial_embedding = reducer.fit(
+            X=data_points,
+            weights=point_weights,
             preopt_steps=preopt_steps,
             gopt_steps=gopt_steps,
             imix=imix,
@@ -350,38 +311,42 @@ def dimred(
         )
 
         # iterative refinement
-        current_imix = imix if imix > 0 else 0.5  # start with 0.5 if not specified
-        for iteration in range(max(1, gopt_steps)):
-            logger.info(f"Iteration {iteration + 1}, imix={current_imix:.2f}")
 
-            low_dim_points = reducer.fit(
-                X=points,
-                weights=weights,
-                init=init_points,
+        # param to control mixing of real and transforder distances
+        current_mix = imix if imix > 0 else 0.5
+
+        for iteration in range(max(1, gopt_steps)):
+            logger.info(f"Refinement iteration {iteration + 1}, mix={current_mix:.2f}")
+
+            low_dim_embedding = reducer.fit(
+                X=data_points,
+                weights=point_weights,
+                init=initial_embedding,
                 preopt_steps=preopt_steps,
                 gopt_steps=1 if grid_width else 0,
-                imix=current_imix,
+                imix=current_mix,
                 auto_grid=True,
             )
 
-            # update imix adaptively
+            # reduce mixing parameter
             if iteration < gopt_steps - 1:
-                current_imix *= 0.8  # gradually reduce mixing parameter
-                current_imix = max(current_imix, 0.1)  # keep >= 0.1
-            init_points = low_dim_points
+                current_mix *= 0.8
+                current_mix = max(current_mix, 0.1)
+
+            initial_embedding = low_dim_embedding
 
         if weighted:
-            output_data = np.hstack((low_dim_points, weights.reshape(-1, 1)))
+            output_data = np.hstack((low_dim_embedding, point_weights.reshape(-1, 1)))
         else:
             output_data = np.hstack(
-                (low_dim_points, np.ones(len(low_dim_points)).reshape(-1, 1))
+                (low_dim_embedding, np.ones(len(low_dim_embedding)).reshape(-1, 1))
             )
+
         np.savetxt(output_filepath, output_data)
+        logger.info(f"Saved results to {output_filepath}")
 
-        logger.info(f"Results saved to {output_filepath}")
-
-    except Exception as e:
-        logger.error(f"Error during dimensionality reduction: {e}")
+    except Exception as error:
+        logger.error(f"Dimensionality reduction failed ! {error}")
         raise click.Abort()
 
 
