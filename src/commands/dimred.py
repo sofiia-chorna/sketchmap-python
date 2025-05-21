@@ -5,6 +5,7 @@ import torch
 
 from tqdm import tqdm
 
+from src.commands.distance import DistanceCalculator
 from src.utils.const import DEVICE
 from src.utils.logger import logger
 
@@ -42,6 +43,8 @@ class DimRed:
             f"Initialized DimRed with high_dim={high_dim}, low_dim={low_dim}, "
             f"metric={metric}, period={period}, center={center}, verbose={verbose}, device={DEVICE}"
         )
+
+        self.dist_calculator = DistanceCalculator(metric, period)
 
     def set_transformation(
         self,
@@ -202,7 +205,9 @@ class DimRed:
         """
 
         # pairwise distances in lowd
-        low_dim_distances = torch.cdist(low_dim_embedding, low_dim_embedding)
+        low_dim_distances = self.dist_calculator.pairwise_distances(
+            low_dim_embedding, low_dim_embedding
+        )
 
         if self.verbose and self._first_stress_call:
             d = low_dim_distances.detach().cpu().numpy()
@@ -646,7 +651,9 @@ class DimRed:
         if self.metric == "dot" and data_points.shape[0] == data_points.shape[1]:
             distance_matrix = data_points
         else:
-            distance_matrix = self._compute_distance_matrix(data_points, weights)
+            distance_matrix = self.dist_calculator.pairwise_distances(
+                data_points, data_points
+            )
 
         if initial_embedding is None:
             logger.info("Computing initial coordinates using classical MDS")
