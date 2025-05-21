@@ -3,11 +3,14 @@ from typing import Literal, Optional, Tuple
 import numpy as np
 import torch
 
+from sklearn.decomposition import PCA
+
 from tqdm import tqdm
 
 from src.commands.distance import DistanceCalculator
 from src.utils.const import DEVICE
 from src.utils.logger import logger
+from src.utils.tensor import to_tensor
 
 
 class DimRed:
@@ -159,32 +162,13 @@ class DimRed:
             case _:
                 raise ValueError(f"Unknown metric: {self.metric}")
 
-    def _classical_mds(self, distance_matrix: torch.Tensor) -> torch.Tensor:
-        """
-        Classical multidimensional scaling (MDS) on a distance matrix.
-        Returns low-dimensional embedding (shape [n, low_dim])
-        """
-        distance_matrix = distance_matrix.cpu()
+    def run_pca(self, data_points: torch.Tensor) -> torch.Tensor:
+        data_points_np = data_points.cpu().numpy()
 
-        num_points = distance_matrix.shape[0]
+        pca = PCA(n_components=self.low_dim)
+        pca_embedded = pca.fit_transform(data_points_np)
 
-        # centering matrix: subtracts the mean from each row/column
-        identity = torch.eye(num_points)
-        ones = torch.ones((num_points, num_points)) / num_points
-        centering_matrix = identity - ones
-
-        # double-centering the squared distance matrix
-        squared_distances = distance_matrix**2
-        gram_matrix = -0.5 * centering_matrix @ squared_distances @ centering_matrix
-
-        eigenvalues, eigenvectors = torch.linalg.eigh(gram_matrix)
-
-        # select top "low_dim" eigenvectors that correspont to the largets eigenvalues
-        top_ids = torch.argsort(eigenvalues.abs(), descending=True)[: self.low_dim]
-
-        # principal coordinates
-        # return eigenvectors[:, top_ids] * torch.sqrt(eigenvalues[top_ids].abs())
-        return eigenvectors[:, top_ids]
+        return to_tensor(pca_embedded)
 
     def _calculate_stress(
         self,
@@ -640,8 +624,8 @@ class DimRed:
             )
 
         if initial_embedding is None:
-            logger.info("Computing initial coordinates using classical MDS")
-            initial_embedding = self._classical_mds(distance_matrix)
+            logger.info("Computing initial coordinates using PCA")
+            initial_embedding = self.run_pca(data_points)
 
         logger.info("Beginning optimization")
 
