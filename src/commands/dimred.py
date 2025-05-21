@@ -159,7 +159,7 @@ class DimRed:
             case _:
                 raise ValueError(f"Unknown metric: {self.metric}")
 
-    def _classical_mds(self, distance_matrix: torch.Tensor):
+    def _classical_mds(self, distance_matrix: torch.Tensor) -> torch.Tensor:
         """
         Classical multidimensional scaling (MDS) on a distance matrix.
         Returns low-dimensional embedding (shape [n, low_dim])
@@ -169,21 +169,22 @@ class DimRed:
         num_points = distance_matrix.shape[0]
 
         # centering matrix: subtracts the mean from each row/column
-        H = torch.eye(num_points) - torch.ones((num_points, num_points)) / num_points
+        identity = torch.eye(num_points)
+        ones = torch.ones((num_points, num_points)) / num_points
+        centering_matrix = identity - ones
 
-        # doubme-centering the squared distance matrix
-        # This converts distances to a gram matrix
-        B = -0.5 * H @ (distance_matrix**2) @ H
+        # double-centering the squared distance matrix
+        squared_distances = distance_matrix**2
+        gram_matrix = -0.5 * centering_matrix @ squared_distances @ centering_matrix
 
-        # eigen decomposition
-        eigenvalues, eigenvectors = torch.linalg.eigh(B)
+        eigenvalues, eigenvectors = torch.linalg.eigh(gram_matrix)
 
-        # sort eigenvalues by absolute magnitude and take top "low_dim"
-        id = torch.argsort(eigenvalues.abs(), descending=True)[: self.low_dim]
+        # select top "low_dim" eigenvectors that correspont to the largets eigenvalues
+        top_ids = torch.argsort(eigenvalues.abs(), descending=True)[: self.low_dim]
 
         # principal coordinates
-        # return eigenvectors[:, id] * torch.sqrt(eigenvalues[id].abs())
-        return eigenvectors[:, id]
+        # return eigenvectors[:, top_ids] * torch.sqrt(eigenvalues[top_ids].abs())
+        return eigenvectors[:, top_ids]
 
     def _calculate_stress(
         self,
