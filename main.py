@@ -207,7 +207,6 @@ def select_landmarks(
 @output_filepath
 @period
 @weighted
-@click.option("--dot", is_flag=True, help="Use dot product distance")
 @click.option(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
 )
@@ -225,7 +224,9 @@ def select_landmarks(
 @click.option("--b-hd", type=int, help="'b' parameter for high-dim sigmoid")
 @click.option("--a-ld", type=int, help="'a' parameter for low-dim sigmoid")
 @click.option("--b-ld", type=int, help="'b' parameter for low-dim sigmoid")
-@click.option("--grid-width", type=float, default=1.5, help="Grid width for global optimization")
+@click.option(
+    "--grid-width", type=float, default=1.5, help="Grid width for global optimization"
+)
 @click.option("--coarse-pts", type=int, default=21, help="Number of coarse grid points")
 @click.option("--fine-pts", type=int, default=201, help="Number of fine grid points")
 @click.option("--center/--no-center", default=True, help="Center the points")
@@ -237,7 +238,6 @@ def dimred(
     output_filepath: str = "low_dimension.dat",
     period: float = 0.0,
     weighted: bool = False,
-    dot: bool = False,
     preopt_steps: int = 100,
     gopt_steps: int = 3,
     imix: float = 1.0,
@@ -266,8 +266,6 @@ def dimred(
     else:
         data_points = raw_data
         point_weights = None
-
-    metric = "dot" if dot else "euclidean"
 
     if None in [
         sigma,
