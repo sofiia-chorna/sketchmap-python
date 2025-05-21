@@ -23,8 +23,6 @@ class DimRed:
         center: bool = True,
         verbose: bool = False,
         grid_width: float = 1.5,
-        coarse_points: int = 21,
-        fine_points: int = 201,
     ):
         self.high_dim = high_dim
         self.low_dim = low_dim
@@ -34,8 +32,6 @@ class DimRed:
         self.verbose = verbose
 
         self.grid_width = grid_width
-        self.coarse_points = coarse_points
-        self.fine_points = fine_points
 
         self.high_dim_transform = self._identity_transform
         self.low_dim_transform = self._identity_transform
@@ -350,157 +346,166 @@ class DimRed:
         num_steps: int,
         adaptive_grid: bool,
     ) -> torch.Tensor:
+        """
+        Optimize embedding using global random walk
 
-        num_points, embedding_dim = embedding.shape
-        identity_matrix = torch.eye(embedding_dim, device=DEVICE)
+        Performs stochastic global optimization by :
 
-        # init grid search params
+        1. Identifying points contributing most to stress
+        2. Performing directed random walks for these points
+        3. Gradually refining the search area
+        4. Tracking the best solution found
+        """
+
+        num_points, dim = embedding.shape
+        best_embedding = embedding.clone()
+        best_loss = float("inf")
+        stagnation = 0
+
+        # set init search radius
         with torch.no_grad():
-            current_radius = torch.max(torch.norm(embedding, dim=1)).item()
-            grid_width = current_radius * 1.2 if adaptive_grid else self.grid_width
+            max_point_radius = torch.norm(embedding, dim=1).max().item()
+            search_radius = max_point_radius * 1.2 if adaptive_grid else self.grid_width
 
-            if self.verbose:
-                print(f"\n--- Global optimization ---")
-                print(f"Init grid width: {grid_width:.4f}")
-                progress_bar = tqdm(total=num_steps, desc="Global optimization")
-
-        coarse_grid = torch.empty(
-            (self.coarse_points, num_points, embedding_dim), device=DEVICE
-        )
-        fine_grid = torch.empty(
-            (self.fine_points, num_points, embedding_dim), device=DEVICE
-        )
-
-        last_loss = float("inf")
-        stagnation_count = 0
-
+        # global optilisation loop
         for step in range(num_steps):
-            if stagnation_count >= 5:
-                if self.verbose:
-                    print(f"\nEarly stopping at step {step} due to stagnation")
+
+            # early stopping if no improvements
+            if stagnation >= 5:
                 break
 
-            current_grid_width = grid_width * (1.0 - 0.5 * step / num_steps)
-            points_to_update = self._identify_problem_points(
+            # reduce search intensity over time (= " annealing schedule ")
+            temperature = search_radius * (1 - step / num_steps) ** 2
+            lr = learning_rate * (1 - step / num_steps)
+
+            problem_indices = self._identify_problem_points(
                 embedding, high_dim_distances, weights, mixing_ratio
             )
 
-            updated = self._process_grid_searches(
+            self._directed_random_walk(
                 embedding,
                 high_dim_distances,
                 weights,
                 mixing_ratio,
-                points_to_update,
-                identity_matrix,
-                current_grid_width,
-                coarse_grid,
-                fine_grid,
+                problem_indices,
+                temperature,
+                lr,
             )
 
-            # final polishing if last step or no updates
-            if step == num_steps - 1 or not updated:
-                embedding = self._polish_embedding(
-                    embedding, high_dim_distances, weights, mixing_ratio, learning_rate
-                )
+            with torch.no_grad():
+                loss = self._calculate_stress(
+                    embedding, high_dim_distances, weights, mixing_ratio
+                ).item()
 
-            stagnation_count, last_loss = self._check_convergence(
-                embedding,
-                high_dim_distances,
-                weights,
-                mixing_ratio,
-                last_loss,
-                stagnation_count,
-                progress_bar,
-                current_grid_width,
-            )
+                if loss < best_loss:
+                    best_loss = loss
+                    best_embedding = embedding.clone()
 
-        if self.verbose:
-            progress_bar.close()
-            print(f"\nOptimization completed. Final loss: {last_loss:.6f}")
+                if abs(loss - best_loss) < 1e-6:
+                    stagnation += 1
+                else:
+                    stagnation = 0
 
-        return embedding
+        # final local refinement
+        return self._polish_embedding(
+            best_embedding,
+            high_dim_distances,
+            weights,
+            mixing_ratio,
+            learning_rate * 0.1,
+        )
 
-    def _process_grid_searches(
+    def _directed_random_walk(
         self,
         embedding: torch.Tensor,
         high_dim_distances: torch.Tensor,
         weights: torch.Tensor,
         mixing_ratio: float,
-        point_indices: torch.Tensor,
-        basis_vectors: torch.Tensor,
-        grid_width: float,
-        coarse_grid: torch.Tensor,
-        fine_grid: torch.Tensor,
+        indices: torch.Tensor,
+        temperature: float,
+        lr: float,
     ) -> bool:
         """
-        Perform coarse-to-fine grid searches for selected points.
-        Returns whether any points were updated
+        Move selected points in random directions
+
+        For each specified point this method:
+        1. Generates a random direction vector
+        2. Calculates a step size based on temperature and learning rate
+        3. Evaluates both current and proposed new positions
+        4. Accepts moves that either improve the solution or meet probabilistic criteria
         """
-        updated = False
 
-        for point_idx in point_indices:
-            original_point = embedding[point_idx].clone()
+        if len(indices) == 0:
+            return False
 
-            for dim in range(embedding.size(1)):
-                # coarse grid search
-                coarse_offsets = (
-                    torch.linspace(
-                        -grid_width, grid_width, self.coarse_points, device=DEVICE
-                    ).view(-1, 1)
-                    * basis_vectors[dim : dim + 1]
-                )
+        # generate random exploration directions : create random unit vectors for each point to optimize
+        directions = torch.randn(
+            len(indices), embedding.shape[1], device=embedding.device
+        )
 
-                coarse_grid[:] = embedding
-                coarse_grid[:, point_idx] += coarse_offsets
+        # normalize to unit length
+        directions = directions / directions.norm(dim=1, keepdim=True)
 
-                with torch.no_grad():
-                    coarse_losses = torch.stack(
-                        [
-                            self._calculate_stress(
-                                coarse_grid[i],
-                                high_dim_distances,
-                                weights,
-                                mixing_ratio,
-                            )
-                            for i in range(self.coarse_points)
-                        ]
+        steps = directions * temperature * lr
+
+        # evaluate current positions
+        with torch.no_grad():
+            current_losses = torch.stack(
+                [
+                    self._calculate_stress(
+                        embedding[i : i + 1],  # single point's embedding
+                        high_dim_distances,
+                        weights,
+                        mixing_ratio,
                     )
+                    for i in indices
+                ]
+            )
 
-                best_coarse_id = coarse_losses.argmin()
-                best_offset = coarse_offsets[best_coarse_id, 0]
+        # calculate proposed new positions
+        proposed_positions = embedding[indices] + step_sizes
 
-                # fine grid search around best coarse result
-                fine_start = max(best_offset - grid_width / 10, -grid_width)
-                fine_end = min(best_offset + grid_width / 10, grid_width)
-                fine_offsets = (
-                    torch.linspace(
-                        fine_start, fine_end, self.fine_points, device=DEVICE
-                    ).view(-1, 1)
-                    * basis_vectors[dim : dim + 1]
-                )
-
-                fine_grid[:] = embedding
-                fine_grid[:, point_idx] += fine_offsets
-
-                with torch.no_grad():
-                    fine_losses = torch.stack(
-                        [
-                            self._calculate_stress(
-                                fine_grid[i], high_dim_distances, weights, mixing_ratio
-                            )
-                            for i in range(self.fine_points)
-                        ]
+        # evaluate proposed positions
+        with torch.no_grad():
+            proposed_losses = torch.stack(
+                [
+                    self._calculate_stress(
+                        # create modified embedding with just this point moved
+                        torch.cat(
+                            [
+                                embedding[:i],  # points before current
+                                proposed_positions[j : j + 1],  # proposed new position
+                                embedding[i + 1 :],  # points after current
+                            ]
+                        ),
+                        high_dim_distances,
+                        weights,
+                        mixing_ratio,
                     )
+                    for j, i in enumerate(
+                        indices
+                    )  # j indexes proposals, i indexes original points
+                ]
+            )
 
-                best_fine_idx = fine_losses.argmin()
-                new_position = original_point + fine_offsets[best_fine_idx]
+        # decide which moves to accepte : determine which moves improved the solution
+        improvements = proposed_losses < current_losses
 
-                # update if significantly improved
-                if not torch.allclose(embedding[point_idx], new_position, rtol=1e-6):
-                    embedding[point_idx] = new_position
-                    updated = True
+        # calculate acceptance probability for worse moves (simulated annealing)
+        acceptance_prob = torch.exp((current_losses - proposed_losses) / temperature)
 
-        return updated
+        # accept either improvements or some worse moves probabilistically
+        accept_move = improvements | (
+            torch.rand_like(acceptance_prob) < acceptance_prob
+        )
+
+        # apply accepted moves
+        if accept_move.any():
+            # only update positions for accepted moves
+            embedding[indices[accept_move]] = proposed_positions[accept_move]
+            return True
+
+        return False
 
     def _identify_problem_points(
         self,
@@ -508,30 +513,27 @@ class DimRed:
         high_dim_distances: torch.Tensor,
         weights: torch.Tensor,
         mixing_ratio: float,
-        min_points_frac: float = 0.2,
+        min_frac: float = 0.2,
     ) -> torch.Tensor:
-        """
-        Identify points contributing most to the stress for targeted refinement
-        """
-        with torch.no_grad():
-            # calculate per-point stress contributions
-            point_stresses = torch.zeros(embedding.size(0), device=DEVICE)
+        """Find points with high stress"""
 
+        with torch.no_grad():
+            stress = torch.zeros(embedding.size(0), device=embedding.device)
             for i in range(embedding.size(0)):
-                point_stresses[i] = self._calculate_stress(
+                stress[i] = self._calculate_stress(
                     embedding[i : i + 1], high_dim_distances, weights, mixing_ratio
                 )
 
-            stress_threshold = point_stresses.mean() + 0.7 * point_stresses.std()
-            problem_mask = point_stresses > stress_threshold
+            threshold = stress.mean() + 0.7 * stress.std()
+            mask = stress > threshold
 
-            min_points = max(int(min_points_frac * embedding.size(0)), 1)
+            min_points = max(int(min_frac * embedding.size(0)), 1)
 
-            if problem_mask.sum() < min_points:
-                _, problem_indices = torch.topk(point_stresses, k=min_points)
-                return problem_indices
+            if mask.sum() < min_points:
+                _, topk = torch.topk(stress, k=min_points)
+                return topk
 
-            return problem_mask.nonzero().view(-1)
+            return mask.nonzero().view(-1)
 
     def _polish_embedding(
         self,
@@ -605,7 +607,7 @@ class DimRed:
         interpolation_mix: float = 0.0,
         learning_rate: float = 0.001,
         auto_grid: bool = True,
-    ) -> np.ndarray:
+    ) -> torch.Tensor:
         """
         Fit the model to the given data points and return the low-dimentional embedding
         """
@@ -642,4 +644,4 @@ class DimRed:
 
         logger.info("Finished fit process")
 
-        return optimized_embedding.cpu().numpy()
+        return optimized_embedding

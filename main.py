@@ -219,7 +219,7 @@ def select_landmarks(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
 )
 @click.option(
-    "--gopt-steps", type=int, default=1.0, help="Number of global optimization steps"
+    "--gopt-steps", type=int, default=3, help="Number of global optimization steps"
 )
 @click.option(
     "--imix", type=float, default=1.0, help="Mixing parameter for stress function"
@@ -235,8 +235,6 @@ def select_landmarks(
 @click.option(
     "--grid-width", type=float, default=1.5, help="Grid width for global optimization"
 )
-@click.option("--coarse-pts", type=int, default=21, help="Number of coarse grid points")
-@click.option("--fine-pts", type=int, default=201, help="Number of fine grid points")
 @click.option("--center/--no-center", default=True, help="Center the points")
 @click.option("--verbose", "-v", is_flag=True)
 def dimred(
@@ -257,8 +255,6 @@ def dimred(
     a_ld: Optional[int] = None,
     b_ld: Optional[int] = None,
     grid_width: Optional[float] = None,
-    coarse_pts: int = 21,
-    fine_pts: int = 201,
     center: bool = True,
     verbose: bool = True,
     seed: int = 42,
@@ -307,8 +303,6 @@ def dimred(
         center=center,
         verbose=verbose,
         grid_width=grid_width or 1.5,
-        coarse_points=coarse_pts,
-        fine_points=fine_pts,
     )
 
     reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
@@ -353,8 +347,7 @@ def dimred(
 
             initial_embedding = low_dim_embedding
 
-        print("low_dim_embedding", low_dim_embedding.shape)
-
+        low_dim_embedding = low_dim_embedding.cpu().numpy()
         np.savetxt(output_filepath, low_dim_embedding)
         logger.info(f"Saved results to {output_filepath}")
 
