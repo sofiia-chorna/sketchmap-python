@@ -84,6 +84,7 @@ def low_dimension(func):
         "--lowd",
         help="Dimention to consider for the lowdim data",
         type=int,
+        default=3,
     )(func)
 
 
