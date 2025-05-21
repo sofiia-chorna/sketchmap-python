@@ -45,6 +45,55 @@ class DimRed:
 
         self.dist_calculator = DistanceCalculator(metric, period)
 
+    def fit(
+        self,
+        data_points: torch.Tensor,
+        initial_embedding: Optional[torch.Tensor],
+        weights: Optional[torch.Tensor] = None,
+        preoptimization_steps: int = 100,
+        global_optimization_steps: int = 0,
+        interpolation_mix: float = 0.0,
+        learning_rate: float = 0.001,
+        auto_grid: bool = True,
+    ) -> torch.Tensor:
+        """
+        Fit the model to the given data points and return the low-dimentional embedding
+        """
+
+        logger.info("Starting fit process")
+
+        if self.center:
+            logger.info("Centering the data")
+            data_points = data_points - data_points.mean(dim=0, keepdim=True)
+
+        if self.metric == "dot" and data_points.shape[0] == data_points.shape[1]:
+            distance_matrix = data_points
+        else:
+            distance_matrix = self.dist_calculator.pairwise_distances(
+                data_points, data_points
+            )
+
+        if initial_embedding is None:
+            logger.info("Computing initial coordinates using PCA")
+            initial_embedding = self.run_pca(data_points)
+
+        logger.info("Beginning optimization")
+
+        optimized_embedding = self._optimize_embedding(
+            high_dim_distances=distance_matrix,
+            initial_embedding=initial_embedding,
+            point_weights=weights,
+            num_preopt_steps=preoptimization_steps,
+            num_global_steps=global_optimization_steps,
+            mixing_ratio=interpolation_mix,
+            learning_rate=learning_rate,
+            adaptive_grid=auto_grid,
+        )
+
+        logger.info("Finished fit process")
+
+        return optimized_embedding
+
     def set_transformation(
         self,
         space: Literal["high", "low"],
@@ -135,28 +184,6 @@ class DimRed:
         Returns the input distances unchanged along with derivatives of 1 (no scaling on gradients during optimization)
         """
         return x, torch.ones_like(x)
-
-    def _compute_distance_matrix(
-        self, points: torch.Tensor, weights: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        logger.info(f"Computing distance matrix with metric='{self.metric}'")
-
-        match self.metric:
-            case "euclidean":
-                if weights is not None:
-                    logger.info("Applying weighted Euclidean distance")
-
-                    weighted_points = points * torch.sqrt(weights.unsqueeze(1))
-
-                    return torch.cdist(weighted_points, weighted_points)
-
-                return torch.cdist(points, points)
-
-            case "dot":
-                return -torch.matmul(points, points.T)
-
-            case _:
-                raise ValueError(f"Unknown metric: {self.metric}")
 
     def run_pca(self, data_points: torch.Tensor) -> torch.Tensor:
         data_points_np = data_points.cpu().numpy()
@@ -562,86 +589,3 @@ class DimRed:
 
         optimizer.step(closure)
         return embed.detach().requires_grad_(False)
-
-    def _check_convergence(
-        self,
-        embedding: torch.Tensor,
-        high_dim_distances: torch.Tensor,
-        weights: torch.Tensor,
-        mixing_ratio: float,
-        previous_loss: float,
-        stagnation_count: int,
-        progress_bar: tqdm,
-        current_grid_width: float,
-    ) -> Tuple[int, float]:
-
-        with torch.no_grad():
-            current_loss = self._calculate_stress(
-                embedding, high_dim_distances, weights, mixing_ratio
-            ).item()
-
-            if abs(previous_loss - current_loss) < 1e-5:
-                stagnation_count += 1
-            else:
-                stagnation_count = 0
-
-            if self.verbose:
-                progress_bar.update(1)
-                progress_bar.set_postfix(
-                    {
-                        "loss": f"{current_loss:.6f}",
-                        "grid_width": f"{current_grid_width:.4f}",
-                        "stagnation": stagnation_count,
-                    }
-                )
-
-        return stagnation_count, current_loss
-
-    def fit(
-        self,
-        data_points: torch.Tensor,
-        initial_embedding: Optional[torch.Tensor],
-        weights: Optional[torch.Tensor] = None,
-        preoptimization_steps: int = 100,
-        global_optimization_steps: int = 0,
-        interpolation_mix: float = 0.0,
-        learning_rate: float = 0.001,
-        auto_grid: bool = True,
-    ) -> torch.Tensor:
-        """
-        Fit the model to the given data points and return the low-dimentional embedding
-        """
-
-        logger.info("Starting fit process")
-
-        if self.center:
-            logger.info("Centering the data")
-            data_points = data_points - data_points.mean(dim=0, keepdim=True)
-
-        if self.metric == "dot" and data_points.shape[0] == data_points.shape[1]:
-            distance_matrix = data_points
-        else:
-            distance_matrix = self.dist_calculator.pairwise_distances(
-                data_points, data_points
-            )
-
-        if initial_embedding is None:
-            logger.info("Computing initial coordinates using PCA")
-            initial_embedding = self.run_pca(data_points)
-
-        logger.info("Beginning optimization")
-
-        optimized_embedding = self._optimize_embedding(
-            high_dim_distances=distance_matrix,
-            initial_embedding=initial_embedding,
-            point_weights=weights,
-            num_preopt_steps=preoptimization_steps,
-            num_global_steps=global_optimization_steps,
-            mixing_ratio=interpolation_mix,
-            learning_rate=learning_rate,
-            adaptive_grid=auto_grid,
-        )
-
-        logger.info("Finished fit process")
-
-        return optimized_embedding
