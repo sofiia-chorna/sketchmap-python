@@ -269,7 +269,7 @@ class DimRed:
         Optimize low-dimentional embedding through two-phase optimization
 
         Phase 1: local optimization using L-BFGS
-        Phase 2: global grid search with adaptive refinement
+        Phase 2: global optimization with random walk
         """
 
         num_points, embedding_dim = initial_embedding.shape
@@ -301,9 +301,9 @@ class DimRed:
                 num_preopt_steps,
             )
 
-        # global grid search
+        # global optimization
         if num_global_steps > 0:
-            current_embedding = self._run_global_search(
+            current_embedding = self._run_global_optimization(
                 current_embedding,
                 high_dim_distances,
                 point_weights,
@@ -363,7 +363,7 @@ class DimRed:
 
         return embedding.detach().requires_grad_(False)
 
-    def _run_global_search(
+    def _run_global_optimization(
         self,
         embedding: torch.Tensor,
         high_dim_distances: torch.Tensor,
