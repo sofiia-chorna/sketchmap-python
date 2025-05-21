@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from scipy.optimize import curve_fit
+import csv
 
 from src.utils.logger import logger
 
@@ -140,6 +141,7 @@ class DistanceHistogram:
                 label=f"peak distance: {self.peak_distance:.2f}",
             )
 
+        """
         if self.gaussian_std is not None:
             gaussian_range = 3 * self.gaussian_std
             ax.axvspan(
@@ -159,6 +161,7 @@ class DistanceHistogram:
                 label="uniform distribution range",
             )
 
+        
         if params["sigma"] is not None:
             ax.axvline(
                 params["sigma"],
@@ -166,10 +169,11 @@ class DistanceHistogram:
                 linestyle="-.",
                 label=f'suggested sigma: {params["sigma"]:.2f}',
             )
+        """
 
         ax.set_xlabel("distance")
         ax.set_ylabel("prob density")
-        ax.set_title(f"High-dim distance distribution analysis for {input_path}")
+        ax.set_title(f"High-dim distance distribution for {input_path}")
         ax.legend()
 
         if save_path:
@@ -203,3 +207,12 @@ class DistanceHistogram:
             f.write(f"- b (high-dim): {params['b_high']}\n")
             f.write(f"- a (low-dim): {params['a_low']}\n")
             f.write(f"- b (low-dim): {params['b_low']}\n")
+
+    def save_distance_data(self, filepath: str) -> None:
+        with open(filepath, "w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["bin_center", "probability_density"])
+            for center, prob in zip(self.bin_centers, self.prob_density):
+                writer.writerow([center, prob])
+
+        logger.info(f"Saved distance histogram data to {filepath}")

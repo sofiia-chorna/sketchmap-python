@@ -89,7 +89,8 @@ def analyse(
     output_filepath = output_filepath or os.path.join(
         RUN_PATH, "distance_analysis_report.txt"
     )
-    plot_filepath = os.path.join(RUN_PATH, f"distance_analysis_histogram.png")
+    plot_filepath = os.path.join(RUN_PATH, "distance_analysis_histogram.png")
+    data_filepath = os.path.join(RUN_PATH, "distance_distribution.csv")
 
     analyzer.plot_analysis(
         save_path=plot_filepath, params=params, input_path=hdim_filepath
@@ -97,6 +98,7 @@ def analyse(
     analyzer.save_analysis_report(
         output_filepath, params=params, input_path=hdim_filepath
     )
+    analyzer.save_distance_data(data_filepath)
 
     logger.info(f"Saving histogram to {output_filepath} and plot to {plot_filepath}")
 
