@@ -64,7 +64,7 @@ class DistanceCalculator:
 
         match self.metric:
             case "euclidean":
-                dist_matrix = torch.cdist(points_1, points_2, p=2)
+                dist_matrix = torch.cdist(points_1, points_2)
 
             case "dot":
                 dist_matrix = -torch.matmul(points_1, points_2.T)
