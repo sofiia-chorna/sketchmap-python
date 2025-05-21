@@ -34,6 +34,7 @@ from src.utils.cli import (
 )
 from src.utils.file import read_file
 from src.utils.logger import RUN_PATH, logger
+from src.utils.tensor import to_tensor
 
 
 @click.group()
@@ -206,6 +207,11 @@ def select_landmarks(
 @hdim_filepath
 @high_dimension
 @low_dimension
+@click.option(
+    "--init-embedding-filepath",
+    type=str,
+    help="The low dimention embeddings from which to start optimisation",
+)
 @output_filepath
 @period
 @weighted
@@ -237,6 +243,7 @@ def dimred(
     hdim_filepath: str,
     high_dimension: int,
     low_dimension: int = 3,
+    init_embedding_filepath: str = None,
     output_filepath: str = "low_dimension.dat",
     period: float = 0.0,
     weighted: bool = False,
@@ -254,12 +261,17 @@ def dimred(
     fine_pts: int = 201,
     center: bool = True,
     verbose: bool = True,
+    seed: int = 42,
 ):
     logger.info("Start running 'dimred'")
 
     params = locals()
     logger.info(f"Parameters: {params}")
 
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    # TODO: add support of tensors
     raw_data = np.loadtxt(hdim_filepath)
 
     if weighted:
@@ -268,6 +280,10 @@ def dimred(
     else:
         data_points = raw_data
         point_weights = None
+
+    data_points = to_tensor(data_points)
+    if point_weights is not None:
+        point_weights = to_tensor(point_weights)
 
     if None in [
         sigma,
@@ -298,24 +314,22 @@ def dimred(
     reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
     reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
+    if init_embedding_filepath:
+        logger.info(f"Using initial low embeddings from {init_embedding_filepath}")
+        initial_embedding = np.loadtxt(init_embedding_filepath)[
+            :, :2
+        ]  # TODO: now dim is hardcoded, move to param
+        initial_embedding = to_tensor(initial_embedding)
+        """
+        initial_embedding = np.hstack([
+            initial_embedding,
+            np.random.normal(0, 0.1, (len(initial_embedding), 1))
+        ])
+        """
+    else:
+        initial_embedding = None
+
     try:
-        # TODO: move to param !
-        initial_embedding = np.loadtxt("low_landmarks_original_val.dat")[:, :2]
-
-        """
-        logger.info("Running initial MDS")
-        initial_embedding = reducer.fit(
-            X=data_points,
-            weights=point_weights,
-            preopt_steps=preopt_steps,
-            gopt_steps=gopt_steps,
-            imix=imix,
-            auto_grid=False,
-        )
-        """
-
-        # iterative refinement
-
         # param to control mixing of real and transforder distances
         current_mix = imix if imix > 0 else 0.5
 
@@ -341,14 +355,7 @@ def dimred(
 
         print("low_dim_embedding", low_dim_embedding.shape)
 
-        if weighted:
-            output_data = np.hstack((low_dim_embedding, point_weights.reshape(-1, 1)))
-        else:
-            output_data = np.hstack(
-                (low_dim_embedding, np.ones(len(low_dim_embedding)).reshape(-1, 1))
-            )
-
-        np.savetxt(output_filepath, output_data)
+        np.savetxt(output_filepath, low_dim_embedding)
         logger.info(f"Saved results to {output_filepath}")
 
     except Exception as error:

@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Tuple, Union
+from typing import Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -100,12 +100,10 @@ class DimRed:
         - a controls the steepness of the rise
         - b controls the asymptotic behavior
         """
-        # Cast the scalar parameters to tensors on the same device / dtype as `x`
         sigma_t = torch.as_tensor(sigma, dtype=x.dtype, device=x.device)
         a_t = torch.as_tensor(a, dtype=x.dtype, device=x.device)
         b_t = torch.as_tensor(b, dtype=x.dtype, device=x.device)
 
-        # ---- common sub-expressions ------------------------------------------------
         # Scaling factor:  2^{a/b} − 1
         scaling_factor = torch.pow(2.0, a_t / b_t) - 1.0  # S
 
@@ -118,11 +116,10 @@ class DimRed:
         # Power used in the outer exponent
         power = -b_t / a_t  # −b/a
 
-        # ---- function value --------------------------------------------------------
+        # function value
         S_val = 1.0 - torch.pow(T, power)  # S_{σ,a,b}(x)
 
-        # ---- derivative ------------------------------------------------------------
-        # dS/dx =  (b * S / σ) * u^{a−1} * T^{−b/a − 1}
+        # derivative dS/dx =  (b * S / σ) * u^{a−1} * T^{−b/a − 1}
         dSdx = (
             (b_t * scaling_factor)
             / sigma_t
@@ -220,12 +217,6 @@ class DimRed:
                 f"High-d distances: min={D.min():.4f}, max={D.max():.4f}, mean={D.mean():.4f}"
             )
 
-            logger.info("Initial low-dimentional distances (d):")
-            logger.info(d)
-
-            logger.info("Initial high-dimentional distances (D):")
-            logger.info(D)
-
             self._first_stress_call = False
 
         # sigmoid transforms
@@ -266,7 +257,6 @@ class DimRed:
         mixing_ratio: float,
         learning_rate: float,
         adaptive_grid: bool,
-        seed: int = 42,
     ) -> torch.Tensor:
         """
         Optimize low-dimentional embedding through two-phase optimization
@@ -274,8 +264,6 @@ class DimRed:
         Phase 1: local optimization using L-BFGS
         Phase 2: global grid search with adaptive refinement
         """
-
-        torch.manual_seed(seed)
 
         num_points, embedding_dim = initial_embedding.shape
         current_embedding = (
@@ -625,9 +613,9 @@ class DimRed:
 
     def fit(
         self,
-        data_points: Union[np.ndarray, torch.Tensor],
-        weights: Optional[Union[np.ndarray, torch.Tensor]] = None,
-        initial_embedding: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        data_points: torch.Tensor,
+        initial_embedding: Optional[torch.Tensor],
+        weights: Optional[torch.Tensor] = None,
         preoptimization_steps: int = 100,
         global_optimization_steps: int = 0,
         interpolation_mix: float = 0.0,
@@ -639,10 +627,6 @@ class DimRed:
         """
 
         logger.info("Starting fit process")
-
-        data_points = _to_tensor(data_points)
-        if weights is not None:
-            weights = _to_tensor(weights)
 
         if self.center:
             logger.info("Centering the data")
@@ -658,8 +642,6 @@ class DimRed:
         if initial_embedding is None:
             logger.info("Computing initial coordinates using classical MDS")
             initial_embedding = self._classical_mds(distance_matrix)
-        else:
-            initial_embedding = _to_tensor(initial_embedding)
 
         logger.info("Beginning optimization")
 
@@ -677,14 +659,3 @@ class DimRed:
         logger.info("Finished fit process")
 
         return optimized_embedding.cpu().numpy()
-
-
-def _to_tensor(data, dtype=torch.float32):
-
-    if isinstance(data, torch.Tensor):
-        return data.to(device=DEVICE, dtype=dtype)
-
-    if isinstance(data, np.ndarray) or isinstance(data, list):
-        return torch.tensor(data, device=DEVICE, dtype=dtype)
-
-    raise TypeError(f"Cannot convert {type(data)} to torch.Tensor !")
