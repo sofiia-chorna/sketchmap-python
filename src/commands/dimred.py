@@ -138,7 +138,7 @@ class DimRed:
         return x, torch.ones_like(x)
 
     def _compute_distance_matrix(
-        self, X: torch.Tensor, weights: Optional[torch.Tensor] = None
+        self, points: torch.Tensor, weights: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         logger.info(f"Computing distance matrix with metric='{self.metric}'")
 
@@ -147,14 +147,14 @@ class DimRed:
                 if weights is not None:
                     logger.info("Applying weighted Euclidean distance")
 
-                    weighted_X = X * torch.sqrt(weights.unsqueeze(1))
+                    weighted_points = points * torch.sqrt(weights.unsqueeze(1))
 
-                    return torch.cdist(weighted_X, weighted_X)
+                    return torch.cdist(weighted_points, weighted_points)
 
-                return torch.cdist(X, X)
+                return torch.cdist(points, points)
 
             case "dot":
-                return -torch.matmul(X, X.T)
+                return -torch.matmul(points, points.T)
 
             case _:
                 raise ValueError(f"Unknown metric: {self.metric}")
@@ -207,8 +207,12 @@ class DimRed:
             d = low_dim_distances.detach().cpu().numpy()
             D = high_dim_distances.detach().cpu().numpy()
 
-            logger.info(f"Low-d distances: min={d.min():.4f}, max={d.max():.4f}, mean={d.mean():.4f}")
-            logger.info(f"High-d distances: min={D.min():.4f}, max={D.max():.4f}, mean={D.mean():.4f}")
+            logger.info(
+                f"Low-d distances: min={d.min():.4f}, max={d.max():.4f}, mean={d.mean():.4f}"
+            )
+            logger.info(
+                f"High-d distances: min={D.min():.4f}, max={D.max():.4f}, mean={D.mean():.4f}"
+            )
 
             logger.info("Initial low-dimentional distances (d):")
             logger.info(d)
