@@ -60,10 +60,10 @@ def read_file(
             data[:, dim] if weighted and dim < data.shape[1] else np.ones(len(data))
         )
 
-        points = _validate_nan(points)
-        weights = _validate_nan(weights)
-
         points = torch.tensor(points, device=DEVICE)
         weights = torch.tensor(weights, device=DEVICE)
+
+        points = _validate_nan(points)
+        weights = _validate_nan(weights)
 
         return points, weights
