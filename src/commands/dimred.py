@@ -542,25 +542,41 @@ class DimRed:
         mixing_ratio: float,
         min_frac: float = 0.2,
     ) -> torch.Tensor:
-        """Find points with high stress"""
+        """
+        Identifies points contributing most to the stress (= poorly embedded points)
 
+        The method :
+        1. Calculates stress for each point
+        2. Determines a threshold for "problem points" (mean + 0.7*std)
+        3. Ensures at least min_frac of points are always considered
+        4. Returns ids of problematic points
+        """
         with torch.no_grad():
-            stress = torch.zeros(embedding.size(0), device=embedding.device)
+            # calculate per-point stress contributions
+            point_stresses = torch.zeros(embedding.size(0), device=embedding.device)
+
             for i in range(embedding.size(0)):
-                stress[i] = self._calculate_stress(
+                # stress when considering only this point's position
+                point_stresses[i] = self._calculate_stress(
                     embedding[i : i + 1], high_dim_distances, weights, mixing_ratio
                 )
 
-            threshold = stress.mean() + 0.7 * stress.std()
-            mask = stress > threshold
+            # determine automatic threshold (mean + 0.7 * std deviation)
+            stress_threshold = point_stresses.mean() + 0.7 * point_stresses.std()
 
-            min_points = max(int(min_frac * embedding.size(0)), 1)
+            high_stress_points = point_stresses > stress_threshold
 
-            if mask.sum() < min_points:
-                _, topk = torch.topk(stress, k=min_points)
-                return topk
+            min_points_to_return = max(int(min_frac * embedding.size(0)), 1)
 
-            return mask.nonzero().view(-1)
+            # if not enough points meet threshold => take top N worst points
+            if high_stress_points.sum() < min_points_to_return:
+                _, worst_point_indices = torch.topk(
+                    point_stresses, k=min_points_to_return
+                )
+                return worst_point_indices
+
+            # ids of points exceeding threshold
+            return high_stress_points.nonzero().view(-1)
 
     def _polish_embedding(
         self,
