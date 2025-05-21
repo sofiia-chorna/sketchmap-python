@@ -20,17 +20,21 @@ class DistanceHistogram:
         self.gaussian_std = None
         self.uniform_cuttoff = None
 
+        self.distances = None
+
     def analyze_distance(self, distances: Union[torch.Tensor, np.ndarray]):
         if isinstance(distances, torch.Tensor):
             distances = distances.cpu().numpy()
 
+        self.distances = distances
+
         if self.max_distance is None:
-            self.max_distance = np.percentile(distances, 99.9)
+            self.max_distance = np.percentile(self.distances, 99.9)
             logger.info(f"Auto-set max_distance to {self.max_distance:.2f}")
 
         # create histogram
         self.bin_edges = np.linspace(0, self.max_distance, self.n_bins + 1)
-        bin_counts, _ = np.histogram(distances, bins=self.bin_edges, density=True)
+        bin_counts, _ = np.histogram(self.distances, bins=self.bin_edges, density=True)
 
         self.prob_density = bin_counts
 
@@ -192,7 +196,11 @@ class DistanceHistogram:
 
             f.write(f"File: {input_path}\n\n")
 
-            f.write(f"- Peak distance: {self.peak_distance:.4f}\n")
+            f.write(f"- Min distance: {self.distances.min():.4f}\n")
+            f.write(f"- Max distance: {self.distances.max():.4f}\n")
+            f.write(f"- Mean distance: {self.distances.mean():.4f}\n")
+
+            f.write(f"\n- Peak distance: {self.peak_distance:.4f}\n")
             if self.gaussian_std is not None:
                 f.write(f"- Estimated gaussian std: {self.gaussian_std:.4f}\n")
                 f.write(f"- 3 sigma gaussian range: {3*self.gaussian_std:.4f}\n")
