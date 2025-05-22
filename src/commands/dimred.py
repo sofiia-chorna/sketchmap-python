@@ -2,15 +2,13 @@ from typing import Literal, Optional, Tuple
 
 import torch
 
-from sklearn.decomposition import PCA
-
 from tqdm import tqdm
 
 from src.commands.distance import DistanceCalculator
+from src.commands.init_dimred import run_mds
+from src.commands.transform import sigmoid_transform, identity_transform
 from src.utils.const import DEVICE
 from src.utils.logger import logger
-from src.utils.tensor import to_tensor
-from src.commands.transform import sigmoid_transform, identity_transform
 
 
 class DimRed:
@@ -33,8 +31,8 @@ class DimRed:
 
         self.grid_width = grid_width
 
-        self.high_dim_transform = self._identity_transform
-        self.low_dim_transform = self._identity_transform
+        self.high_dim_transform = identity_transform
+        self.low_dim_transform = identity_transform
 
         self._first_stress_call = True
 
@@ -75,8 +73,8 @@ class DimRed:
 
         if initial_embedding is None:
             logger.info("Computing initial coordinates using PCA")
-            # initial_embedding = self.run_pca(data_points)
-            initial_embedding = self.run_mds(data_points)
+            # initial_embedding = run_pca(data_points, self.low_dim)
+            initial_embedding = run_mds(distance_matrix, self.low_dim)
 
         logger.info("Beginning optimization")
 
@@ -134,17 +132,6 @@ class DimRed:
                 self.low_dim_transform = transform_func
             case _:
                 raise ValueError(f"Invalid space: {space}. Must be 'high' or 'low'")
-
-    def run_mds(self, distance_matrix):
-        pass
-
-    def run_pca(self, data_points: torch.Tensor) -> torch.Tensor:
-        data_points_np = data_points.cpu().numpy()
-
-        pca = PCA(n_components=self.low_dim)
-        pca_embedded = pca.fit_transform(data_points_np)
-
-        return to_tensor(pca_embedded)
 
     def _calculate_stress(
         self,
