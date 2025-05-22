@@ -10,6 +10,7 @@ from src.commands.distance import DistanceCalculator
 from src.utils.const import DEVICE
 from src.utils.logger import logger
 from src.utils.tensor import to_tensor
+from src.commands.transform import sigmoid_transform, identity_transform
 
 
 class DimRed:
@@ -74,7 +75,8 @@ class DimRed:
 
         if initial_embedding is None:
             logger.info("Computing initial coordinates using PCA")
-            initial_embedding = self.run_pca(data_points)
+            # initial_embedding = self.run_pca(data_points)
+            initial_embedding = self.run_mds(data_points)
 
         logger.info("Beginning optimization")
 
@@ -114,10 +116,10 @@ class DimRed:
                         "Sigmoid transform requires exactly 3 parameters: "
                         "(sigma, a, b)"
                     )
-                transform_func = lambda x: self._sigmoid_transform(x, *parameters)
+                transform_func = lambda x: sigmoid_transform(x, *parameters)
 
             case "identity":
-                transform_func = self._identity_transform
+                transform_func = identity_transform
 
             case _:
                 raise ValueError(
@@ -133,56 +135,8 @@ class DimRed:
             case _:
                 raise ValueError(f"Invalid space: {space}. Must be 'high' or 'low'")
 
-    def _sigmoid_transform(
-        self, x: torch.Tensor, sigma: float, a: float, b: float
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Generalized sigmoid transformation for distance scaling
-
-        Implements the function:
-        y(x) = 1 - [1 + (2^(a/b) - 1)*(x / sigma)^a] ^ (-b / a)
-
-        where:
-        - sigma controls location of so called infection point
-        - a controls the steepness of the rise
-        - b controls the asymptotic behavior
-        """
-        sigma_t = torch.as_tensor(sigma, dtype=x.dtype, device=x.device)
-        a_t = torch.as_tensor(a, dtype=x.dtype, device=x.device)
-        b_t = torch.as_tensor(b, dtype=x.dtype, device=x.device)
-
-        # Scaling factor:  2^{a/b} − 1
-        scaling_factor = torch.pow(2.0, a_t / b_t) - 1.0  # S
-
-        # Normalised input:  u = x / σ
-        u = x / sigma_t  # u
-
-        # Inner term:  T = 1 + S * u^{a}
-        T = 1.0 + scaling_factor * torch.pow(u, a_t)  # T
-
-        # Power used in the outer exponent
-        power = -b_t / a_t  # −b/a
-
-        # function value
-        S_val = 1.0 - torch.pow(T, power)  # S_{σ,a,b}(x)
-
-        # derivative dS/dx =  (b * S / σ) * u^{a−1} * T^{−b/a − 1}
-        dSdx = (
-            (b_t * scaling_factor)
-            / sigma_t
-            * torch.pow(u, a_t - 1.0)
-            * torch.pow(T, power - 1.0)  # power-1 == −b/a − 1
-        )
-
-        return S_val, dSdx
-
-    def _identity_transform(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Identity transformation ("pass-through") function
-
-        Returns the input distances unchanged along with derivatives of 1 (no scaling on gradients during optimization)
-        """
-        return x, torch.ones_like(x)
+    def run_mds(self, distance_matrix):
+        pass
 
     def run_pca(self, data_points: torch.Tensor) -> torch.Tensor:
         data_points_np = data_points.cpu().numpy()
