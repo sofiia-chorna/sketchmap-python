@@ -219,7 +219,7 @@ def select_landmarks(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
 )
 @click.option(
-    "--gopt-steps", type=int, default=3, help="Number of global optimization steps"
+    "--gopt-steps", type=int, default=0, help="Number of global optimization steps"
 )
 @click.option(
     "--imix", type=float, default=1.0, help="Mixing parameter for stress function"
@@ -325,7 +325,7 @@ def dimred(
 
     try:
         # param to control mixing of real and transforder distances
-        current_mix = imix if imix > 0 else 0.5
+        current_mix = imix
 
         for iteration in range(max(1, gopt_steps)):
             logger.info(f"Refinement iteration {iteration + 1}, mix={current_mix:.2f}")
@@ -340,10 +340,13 @@ def dimred(
                 auto_grid=True,
             )
 
+            min_mix = 0.1
+            mix_decay = 0.8
+
             # reduce mixing parameter
             if iteration < gopt_steps - 1:
-                current_mix *= 0.8
-                current_mix = max(current_mix, 0.1)
+                current_mix *= mix_decay
+                current_mix = max(current_mix, min_mix)
 
             initial_embedding = low_dim_embedding
 
