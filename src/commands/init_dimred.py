@@ -14,7 +14,7 @@ def run_pca(data_points: torch.Tensor, n_components: int = 2) -> torch.Tensor:
     return to_tensor(pca_embedded)
 
 
-def run_mds(self, distance_matrix: torch.Tensor) -> torch.Tensor:
+def run_mds(distance_matrix: torch.Tensor, n_components: int = 2) -> torch.Tensor:
     """
     Classical multidimensional scaling (MDS) on a distance matrix.
     Returns low-dimensional embedding (shape [n, low_dim])
@@ -34,8 +34,8 @@ def run_mds(self, distance_matrix: torch.Tensor) -> torch.Tensor:
 
     eigenvalues, eigenvectors = torch.linalg.eigh(gram_matrix)
 
-    # select top "low_dim" eigenvectors that correspont to the largets eigenvalues
-    top_ids = torch.argsort(eigenvalues.abs(), descending=True)[: self.low_dim]
+    # select top "n_components" eigenvectors that correspont to the largets eigenvalues
+    top_ids = torch.argsort(eigenvalues.abs(), descending=True)[:n_components]
 
     # principal coordinates
     # return eigenvectors[:, top_ids] * torch.sqrt(eigenvalues[top_ids].abs())
