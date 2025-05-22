@@ -34,9 +34,13 @@ def run_mds(distance_matrix: torch.Tensor, n_components: int = 2) -> torch.Tenso
 
     eigenvalues, eigenvectors = torch.linalg.eigh(gram_matrix)
 
-    # select top "n_components" eigenvectors that correspont to the largets eigenvalues
-    top_ids = torch.argsort(eigenvalues.abs(), descending=True)[:n_components]
+    sorted_ids = torch.argsort(eigenvalues, descending=True)
+    top_ids = sorted_ids[:n_components]
 
-    # principal coordinates
-    # return eigenvectors[:, top_ids] * torch.sqrt(eigenvalues[top_ids].abs())
-    return eigenvectors[:, top_ids]
+    # principal components
+    top_eigenvalues = eigenvalues[top_ids]
+    top_eigenvectors = eigenvectors[:, top_ids]
+
+    coordinates = top_eigenvectors * torch.sqrt(top_eigenvalues.clamp(min=0))
+
+    return coordinates
