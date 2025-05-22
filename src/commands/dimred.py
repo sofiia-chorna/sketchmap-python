@@ -1,6 +1,5 @@
 from typing import Literal, Optional, Tuple
 
-import numpy as np
 import torch
 
 from sklearn.decomposition import PCA
@@ -473,7 +472,7 @@ class DimRed:
         # normalize to unit length
         directions = directions / directions.norm(dim=1, keepdim=True)
 
-        steps = directions * temperature * lr
+        step_sizes = directions * temperature * lr
 
         # evaluate current positions
         with torch.no_grad():
