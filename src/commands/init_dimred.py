@@ -19,28 +19,29 @@ def run_mds(distance_matrix: torch.Tensor, n_components: int = 2) -> torch.Tenso
     Classical multidimensional scaling (MDS) on a distance matrix.
     Returns low-dimensional embedding (shape [n, low_dim])
     """
-    distance_matrix = distance_matrix.cpu()
+    distance_matrix = distance_matrix.double()
 
-    num_points = distance_matrix.shape[0]
+    # compute gramm matrix
+    M = -0.5 * distance_matrix**2
+    M -= M.mean(dim=0, keepdim=True)  # substract column means
+    M -= M.mean(dim=1, keepdim=True)  # substract row means
 
-    # centering matrix: subtracts the mean from each row/column
-    identity = torch.eye(num_points)
-    ones = torch.ones((num_points, num_points)) / num_points
-    centering_matrix = identity - ones
+    eigenvalues, eigenvectors = torch.linalg.eigh(M)
 
-    # double-centering the squared distance matrix
-    squared_distances = distance_matrix**2
-    gram_matrix = -0.5 * centering_matrix @ squared_distances @ centering_matrix
-
-    eigenvalues, eigenvectors = torch.linalg.eigh(gram_matrix)
-
-    sorted_ids = torch.argsort(eigenvalues, descending=True)
-    top_ids = sorted_ids[:n_components]
+    sorted_indices = torch.argsort(eigenvalues, descending=True)
+    top_indices = sorted_indices[:n_components]
 
     # principal components
-    top_eigenvalues = eigenvalues[top_ids]
-    top_eigenvectors = eigenvectors[:, top_ids]
+    top_eigenvalues = eigenvalues[top_indices]
+    top_eigenvectors = eigenvectors[:, top_indices]
 
     coordinates = top_eigenvectors * torch.sqrt(top_eigenvalues.clamp(min=0))
+
+    # align signs to match c++ convention : make max abs value positive
+    for i in range(n_components):
+        col = coordinates[:, i]
+        max_id = torch.argmax(torch.abs(col))
+        if col[max_id] < 0:
+            coordinates[:, i] *= -1
 
     return coordinates
