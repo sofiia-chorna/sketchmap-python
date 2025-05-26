@@ -222,7 +222,7 @@ def select_landmarks(
     "--gopt-steps", type=int, default=0, help="Number of global optimization steps"
 )
 @click.option(
-    "--imix", type=float, default=1.0, help="Mixing parameter for stress function"
+    "--imix", type=float, default=0.0, help="Mixing parameter for stress function"
 )
 @metric
 @click.option(
@@ -247,7 +247,7 @@ def dimred(
     weighted: bool = False,
     preopt_steps: int = 100,
     gopt_steps: int = 3,
-    imix: float = 1.0,
+    imix: float = 0.0,
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
     sigma: Optional[float] = None,
     a_hd: Optional[int] = None,
@@ -302,17 +302,11 @@ def dimred(
         period=period,
         center=center,
         verbose=verbose,
-        grid_width=grid_width or 1.5,
     )
-
-    reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
-    reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
     if init_embedding_filepath:
         logger.info(f"Using initial low embeddings from {init_embedding_filepath}")
-        initial_embedding = np.loadtxt(init_embedding_filepath)[
-            :, :2
-        ]  # TODO: now dim is hardcoded, move to param
+        initial_embedding = np.loadtxt(init_embedding_filepath)
         initial_embedding = to_tensor(initial_embedding)
         """
         initial_embedding = np.hstack([
@@ -332,12 +326,10 @@ def dimred(
 
             low_dim_embedding = reducer.fit(
                 data_points=data_points,
-                weights=point_weights,
+                point_weights=point_weights,
                 initial_embedding=initial_embedding,
-                preoptimization_steps=preopt_steps,
-                global_optimization_steps=gopt_steps if grid_width else 0,
-                interpolation_mix=current_mix,
-                auto_grid=True,
+                num_steps=preopt_steps,
+                mixing_ratio=current_mix,
             )
 
             min_mix = 0.1
@@ -353,6 +345,9 @@ def dimred(
         low_dim_embedding = low_dim_embedding.cpu().numpy()
         np.savetxt(output_filepath, low_dim_embedding)
         logger.info(f"Saved results to {output_filepath}")
+
+    # reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
+    # reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
     except Exception as error:
         logger.error(f"Dimensionality reduction failed ! {error}")
