@@ -318,7 +318,32 @@ def dimred(
         initial_embedding = None
 
     try:
-        # param to control mixing of real and transforder distances
+        logger.info(f"Refinement with identity function")
+        low_dim_embedding = reducer.fit(
+            data_points=data_points,
+            point_weights=point_weights,
+            initial_embedding=initial_embedding,
+            num_steps=preopt_steps,
+            mixing_ratio=imix,
+        )
+
+        reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
+        reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
+
+        logger.info(f"Refinement with sigmoid function")
+        low_dim_embedding = reducer.fit(
+            data_points=data_points,
+            point_weights=point_weights,
+            initial_embedding=low_dim_embedding,
+            num_steps=preopt_steps,
+            mixing_ratio=imix,
+        )
+
+        low_dim_embedding = low_dim_embedding.cpu().numpy()
+        np.savetxt(output_filepath, low_dim_embedding)
+        logger.info(f"Saved results to {output_filepath}")
+
+        """
         current_mix = imix
 
         for iteration in range(max(1, gopt_steps)):
@@ -341,13 +366,7 @@ def dimred(
                 current_mix = max(current_mix, min_mix)
 
             initial_embedding = low_dim_embedding
-
-        low_dim_embedding = low_dim_embedding.cpu().numpy()
-        np.savetxt(output_filepath, low_dim_embedding)
-        logger.info(f"Saved results to {output_filepath}")
-
-    # reducer.set_transformation("high", "sigmoid", (sigma, a_hd, b_hd))
-    # reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
+            """
 
     except Exception as error:
         logger.error(f"Dimensionality reduction failed ! {error}")
