@@ -72,8 +72,8 @@ class DimRed:
             )
 
         if initial_embedding is None:
-            logger.info("Computing initial coordinates using PCA")
-            # initial_embedding = run_pca(data_points, self.low_dim)
+            logger.info("Computing initial coordinates using MDS")
+            #    initial_embedding = run_pca(data_points, self.low_dim)
             initial_embedding = run_mds(distance_matrix, self.low_dim)
 
         logger.info("Beginning optimization")
@@ -83,10 +83,8 @@ class DimRed:
             initial_embedding=initial_embedding,
             point_weights=weights,
             num_preopt_steps=preoptimization_steps,
-            num_global_steps=global_optimization_steps,
             mixing_ratio=interpolation_mix,
             learning_rate=learning_rate,
-            adaptive_grid=auto_grid,
         )
 
         logger.info("Finished fit process")
@@ -147,30 +145,34 @@ class DimRed:
         1. direct distance difference (D - d)
         2. transformed distance difference (f(D) - f(d))
         """
+        if self.verbose and self._first_stress_call:
+            D = high_dim_distances.detach().cpu().numpy()
+            logger.info(f"High-dim distances (sample 3x3):\n{D[:3, :3]}")
+            logger.info(
+                f"High-dim stats: min={D.min():.4f}, max={D.max():.4f}, mean={D.mean():.4f}"
+            )
 
-        # pairwise distances in lowd
+        # Low-dim pairwise distances
         low_dim_distances = self.dist_calculator.pairwise_distances(
             low_dim_embedding, low_dim_embedding
         )
-
         if self.verbose and self._first_stress_call:
             d = low_dim_distances.detach().cpu().numpy()
-            D = high_dim_distances.detach().cpu().numpy()
-
+            logger.info(f"Low-dim distances (sample 3x3):\n{d[:3, :3]}")
             logger.info(
-                f"Low-d distances: min={d.min():.4f}, max={d.max():.4f}, mean={d.mean():.4f}"
-            )
-            logger.info(
-                f"High-d distances: min={D.min():.4f}, max={D.max():.4f}, mean={D.mean():.4f}"
+                f"Low-dim stats: min={d.min():.4f}, max={d.max():.4f}, mean={d.mean():.4f}"
             )
 
-            self._first_stress_call = False
-
-        # sigmoid transforms
+        # Log distance transforms
         transformed_high_dim, _ = self.high_dim_transform(high_dim_distances)
         transformed_low_dim, _ = self.low_dim_transform(low_dim_distances)
+        if self.verbose and self._first_stress_call:
+            tD = transformed_high_dim.detach().cpu().numpy()
+            td = transformed_low_dim.detach().cpu().numpy()
+            logger.info(f"Transformed high-dim (sample 3x3):\n{tD[:3, :3]}")
+            logger.info(f"Transformed low-dim (sample 3x3):\n{td[:3, :3]}")
 
-        # caclulate both components of the stress function
+        # Stress calculations
         direct_stress = torch.sum(
             weights * (high_dim_distances - low_dim_distances) ** 2
         )
@@ -187,10 +189,12 @@ class DimRed:
 
         if self.verbose:
             logger.info(
-                f"Stress components - direct: {direct_stress.item():.4f}, "
-                f"transformed: {transformed_stress.item():.4f}, "
-                f"total: {combined_stress.item():.4f}"
+                f"Stress components:\n"
+                f"  Direct: {direct_stress.item():.4f}\n"
+                f"  Transformed: {transformed_stress.item():.4f}\n"
+                f"  Combined (λ={mixing_ratio:.2f}): {combined_stress.item():.4f}"
             )
+            self._first_stress_call = False
 
         return combined_stress
 
@@ -200,348 +204,72 @@ class DimRed:
         initial_embedding: torch.Tensor,
         point_weights: Optional[torch.Tensor],
         num_preopt_steps: int,
-        num_global_steps: int,
         mixing_ratio: float,
         learning_rate: float,
-        adaptive_grid: bool,
     ) -> torch.Tensor:
-        """
-        Optimize low-dimentional embedding through two-phase optimization
-
-        Phase 1: local optimization using L-BFGS
-        Phase 2: global optimization with random walk
-        """
-
         num_points, embedding_dim = initial_embedding.shape
-        current_embedding = (
-            initial_embedding.clone().to(DEVICE).detach().requires_grad_(True)
-        )
 
         if point_weights is None:
-            point_weights = torch.ones(num_points, device=DEVICE)
+            point_weights = torch.ones(
+                (num_points, num_points), device=DEVICE, dtype=torch.float64
+            )
+            if self.verbose:
+                logger.info(
+                    f"Initialized default weights (all 1.0, shape: {point_weights.shape})"
+                )
+        elif self.verbose:
+            logger.info(f"Using custom weights (shape: {point_weights.shape})")
 
         if self.verbose:
-            print("=" * 40 + " Optimization configuration " + "=" * 40)
-            print("Points:".ljust(20), num_points)
-            print("Dimensions:".ljust(20), embedding_dim)
-            print("Local steps:".ljust(20), num_preopt_steps)
-            print("Global steps:".ljust(20), num_global_steps)
-            print("Learning rate:".ljust(20), "%.2e" % learning_rate)
-            print("Mixing ratio:".ljust(20), "%.2f" % mixing_ratio)
-            print("=" * 85)
+            logger.info("=" * 40 + " Optimization Configuration " + "=" * 40)
+            logger.info(f"{'Points:':<20} {num_points}")
+            logger.info(f"{'Dimensions:':<20} {embedding_dim}")
+            logger.info(f"{'Max LBFGS steps:':<20} {num_preopt_steps}")
+            logger.info(f"{'Learning rate:':<20} {learning_rate:.2e}")
+            logger.info(f"{'Mixing ratio (λ):':<20} {mixing_ratio:.2f}")
+            logger.info("=" * 85)
 
-        # local optimization
-        if num_preopt_steps > 0:
-            current_embedding = self._run_local_optimization(
-                current_embedding,
-                high_dim_distances,
-                point_weights,
-                mixing_ratio,
-                learning_rate,
-                num_preopt_steps,
-            )
-
-        # global optimization
-        if num_global_steps > 0:
-            current_embedding = self._run_global_optimization(
-                current_embedding,
-                high_dim_distances,
-                point_weights,
-                mixing_ratio,
-                learning_rate,
-                num_global_steps,
-                adaptive_grid,
-            )
-
-        return current_embedding
-
-    def _run_local_optimization(
-        self,
-        embedding: torch.Tensor,
-        high_dim_distances: torch.Tensor,
-        weights: torch.Tensor,
-        mixing_ratio: float,
-        learning_rate: float,
-        num_steps: int,
-    ) -> torch.Tensor:
-
-        if self.verbose:
-            print("\n--- Local optimization ---")
-            progress_bar = tqdm(total=num_steps, desc="LBFGS optimization")
+        embedding = (
+            initial_embedding.to(device=DEVICE, dtype=torch.float64)
+            .clone()
+            .detach()
+            .requires_grad_(True)
+        )
 
         optimizer = torch.optim.LBFGS(
             [embedding],
             lr=learning_rate,
-            max_iter=num_steps,
+            max_iter=num_preopt_steps,
+            tolerance_grad=1e-6,
+            tolerance_change=1e-9,
+            history_size=10,
             line_search_fn="strong_wolfe",
-            history_size=100,
         )
 
         def closure():
-            optimizer.zero_grad(set_to_none=True)
+            optimizer.zero_grad()
             loss = self._calculate_stress(
-                embedding, high_dim_distances, weights, mixing_ratio
+                embedding, high_dim_distances, point_weights, mixing_ratio
             )
             loss.backward()
-
             if self.verbose:
-                progress_bar.update(1)
-                progress_bar.set_postfix({"loss": f"{loss.item():.6f}"})
-
+                logger.debug(f"Current loss: {loss.item():.6f}")
             return loss
-
-        optimizer.step(closure)
 
         if self.verbose:
-            progress_bar.close()
-
-            with torch.no_grad():
-                final_loss = self._calculate_stress(
-                    embedding, high_dim_distances, weights, mixing_ratio
-                ).item()
-                print(f"Final local loss: {final_loss:.6f}")
-
-        return embedding.detach().requires_grad_(False)
-
-    def _run_global_optimization(
-        self,
-        embedding: torch.Tensor,
-        high_dim_distances: torch.Tensor,
-        weights: torch.Tensor,
-        mixing_ratio: float,
-        learning_rate: float,
-        num_steps: int,
-        adaptive_grid: bool,
-    ) -> torch.Tensor:
-        """
-        Optimize embedding using global random walk
-
-        Performs stochastic global optimization by :
-
-        1. Identifying points contributing most to stress
-        2. Performing directed random walks for these points
-        3. Gradually refining the search area
-        4. Tracking the best solution found
-        """
-
-        num_points, dim = embedding.shape
-        best_embedding = embedding.clone()
-        best_loss = float("inf")
-        stagnation = 0
-
-        # set init search radius
-        with torch.no_grad():
-            max_point_radius = torch.norm(embedding, dim=1).max().item()
-            search_radius = max_point_radius * 1.2 if adaptive_grid else self.grid_width
-
-        # global optilisation loop
-        for step in range(num_steps):
-
-            # early stopping if no improvements
-            if stagnation >= 5:
-                break
-
-            # reduce search intensity over time (= " annealing schedule ")
-            temperature = search_radius * (1 - step / num_steps) ** 2
-            lr = learning_rate * (1 - step / num_steps)
-
-            problem_indices = self._identify_problem_points(
-                embedding, high_dim_distances, weights, mixing_ratio
-            )
-
-            self._directed_random_walk(
-                embedding,
-                high_dim_distances,
-                weights,
-                mixing_ratio,
-                problem_indices,
-                temperature,
-                lr,
-            )
-
-            with torch.no_grad():
-                loss = self._calculate_stress(
-                    embedding, high_dim_distances, weights, mixing_ratio
-                ).item()
-
-                if loss < best_loss:
-                    best_loss = loss
-                    best_embedding = embedding.clone()
-
-                if abs(loss - best_loss) < 1e-6:
-                    stagnation += 1
-                else:
-                    stagnation = 0
-
-        # final local refinement
-        return self._polish_embedding(
-            best_embedding,
-            high_dim_distances,
-            weights,
-            mixing_ratio,
-            learning_rate * 0.1,
-        )
-
-    def _directed_random_walk(
-        self,
-        embedding: torch.Tensor,
-        high_dim_distances: torch.Tensor,
-        weights: torch.Tensor,
-        mixing_ratio: float,
-        indices: torch.Tensor,
-        temperature: float,
-        lr: float,
-    ) -> bool:
-        """
-        Move selected points in random directions
-
-        For each specified point this method:
-        1. Generates a random direction vector
-        2. Calculates a step size based on temperature and learning rate
-        3. Evaluates both current and proposed new positions
-        4. Accepts moves that either improve the solution or meet probabilistic criteria
-        """
-
-        if len(indices) == 0:
-            return False
-
-        # generate random exploration directions : create random unit vectors for each point to optimize
-        directions = torch.randn(
-            len(indices), embedding.shape[1], device=embedding.device
-        )
-
-        # normalize to unit length
-        directions = directions / directions.norm(dim=1, keepdim=True)
-
-        step_sizes = directions * temperature * lr
-
-        # evaluate current positions
-        with torch.no_grad():
-            current_losses = torch.stack(
-                [
-                    self._calculate_stress(
-                        embedding[i : i + 1],  # single point's embedding
-                        high_dim_distances,
-                        weights,
-                        mixing_ratio,
-                    )
-                    for i in indices
-                ]
-            )
-
-        # calculate proposed new positions
-        proposed_positions = embedding[indices] + step_sizes
-
-        # evaluate proposed positions
-        with torch.no_grad():
-            proposed_losses = torch.stack(
-                [
-                    self._calculate_stress(
-                        # create modified embedding with just this point moved
-                        torch.cat(
-                            [
-                                embedding[:i],  # points before current
-                                proposed_positions[j : j + 1],  # proposed new position
-                                embedding[i + 1 :],  # points after current
-                            ]
-                        ),
-                        high_dim_distances,
-                        weights,
-                        mixing_ratio,
-                    )
-                    for j, i in enumerate(
-                        indices
-                    )  # j indexes proposals, i indexes original points
-                ]
-            )
-
-        # decide which moves to accepte : determine which moves improved the solution
-        improvements = proposed_losses < current_losses
-
-        # calculate acceptance probability for worse moves (simulated annealing)
-        acceptance_prob = torch.exp((current_losses - proposed_losses) / temperature)
-
-        # accept either improvements or some worse moves probabilistically
-        accept_move = improvements | (
-            torch.rand_like(acceptance_prob) < acceptance_prob
-        )
-
-        # apply accepted moves
-        if accept_move.any():
-            # only update positions for accepted moves
-            embedding[indices[accept_move]] = proposed_positions[accept_move]
-            return True
-
-        return False
-
-    def _identify_problem_points(
-        self,
-        embedding: torch.Tensor,
-        high_dim_distances: torch.Tensor,
-        weights: torch.Tensor,
-        mixing_ratio: float,
-        min_frac: float = 0.2,
-    ) -> torch.Tensor:
-        """
-        Identifies points contributing most to the stress (= poorly embedded points)
-
-        The method :
-        1. Calculates stress for each point
-        2. Determines a threshold for "problem points" (mean + 0.7*std)
-        3. Ensures at least min_frac of points are always considered
-        4. Returns ids of problematic points
-        """
-        with torch.no_grad():
-            # calculate per-point stress contributions
-            point_stresses = torch.zeros(embedding.size(0), device=embedding.device)
-
-            for i in range(embedding.size(0)):
-                # stress when considering only this point's position
-                point_stresses[i] = self._calculate_stress(
-                    embedding[i : i + 1], high_dim_distances, weights, mixing_ratio
-                )
-
-            # determine automatic threshold (mean + 0.7 * std deviation)
-            stress_threshold = point_stresses.mean() + 0.7 * point_stresses.std()
-
-            high_stress_points = point_stresses > stress_threshold
-
-            min_points_to_return = max(int(min_frac * embedding.size(0)), 1)
-
-            # if not enough points meet threshold => take top N worst points
-            if high_stress_points.sum() < min_points_to_return:
-                _, worst_point_indices = torch.topk(
-                    point_stresses, k=min_points_to_return
-                )
-                return worst_point_indices
-
-            # ids of points exceeding threshold
-            return high_stress_points.nonzero().view(-1)
-
-    def _polish_embedding(
-        self,
-        embedding: torch.Tensor,
-        high_dim_distances: torch.Tensor,
-        weights: torch.Tensor,
-        mixing_ratio: float,
-        learning_rate: float,
-    ) -> torch.Tensor:
-        """Final refinement using L-BFGS optimization"""
-
-        logger.info("Running final L-BFGS polishing step")
-
-        embed = embedding.detach().requires_grad_(True)
-        optimizer = torch.optim.LBFGS(
-            [embed], lr=learning_rate * 0.1, max_iter=50, line_search_fn="strong_wolfe"
-        )
-
-        def closure():
-            optimizer.zero_grad(set_to_none=True)
-            loss = self._calculate_stress(
-                embed, high_dim_distances, weights, mixing_ratio
-            )
-            loss.backward()
-            return loss
+            logger.info("Starting LBFGS optimization")
 
         optimizer.step(closure)
-        return embed.detach().requires_grad_(False)
+
+        optimized_embedding = embedding.detach()
+
+        if self.verbose:
+            logger.info(
+                f"Optimization finished. Final embedding (sample):\n{optimized_embedding[:3].cpu().numpy()}"
+            )
+            final_loss = self._calculate_stress(
+                optimized_embedding, high_dim_distances, point_weights, mixing_ratio
+            ).item()
+            logger.info(f"Final loss: {final_loss:.6f}")
+
+        return optimized_embedding
