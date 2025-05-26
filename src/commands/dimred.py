@@ -45,7 +45,7 @@ class DimRed:
         learning_rate: float = 0.001,
     ) -> torch.Tensor:
         """
-        Fit the model to the given data points and return the low-dimentional embedding
+        Fit the model to the given data points and return the low-dimensional embedding
         """
 
         logger.info("Starting fit process")
@@ -71,7 +71,7 @@ class DimRed:
             if self.verbose:
                 logger.info("Using uniform weights")
         elif self.verbose:
-            logger.info("Using custom weights")
+            logger.info(f"Using custom weights. Sample: {point_weights[:10]}")
 
         if self.verbose:
             logger.info("=" * 20 + " Optimization configuration " + "=" * 20)
@@ -151,59 +151,67 @@ class DimRed:
         """
         Calculate the stress between high-dim and low-dim distances
 
-        It retutrn a combined stress value to minimize:
-        1. direct distance difference (D - d)
-        2. transformed distance difference (f(D) - f(d))
+        The stress combines:
+        1. direct distance difference (D - d)^2
+        2. transformed distance difference (f(D) - f(d))^2
+
+        f() = configured transformation (sigmoid/identity)
+
+        mixing_ratio provides balance between direct and transformed stress (0=all transformed, 1=all direct)
         """
+        low_dim_distances = self.dist_calculator.pairwise_distances(
+            low_dim_embedding, low_dim_embedding
+        )
+
+        transformed_high_dim, _ = self.high_dim_transform(high_dim_distances)
+        transformed_low_dim, _ = self.low_dim_transform(low_dim_distances)
+
+        weights_2d = weights.unsqueeze(0) * weights.unsqueeze(1)
+
+        direct_stress = torch.sum(
+            weights_2d * (high_dim_distances - low_dim_distances) ** 2
+        )
+        transformed_stress = torch.sum(
+            weights_2d * (transformed_high_dim - transformed_low_dim) ** 2
+        )
+
+        combined_stress = (
+            mixing_ratio * direct_stress + (1 - mixing_ratio) * transformed_stress
+        )
 
         if self.verbose and self._first_stress_call:
+            # log highdim distances
             D = high_dim_distances.detach().cpu().numpy()
             logger.info(f"High-dim distances (sample 3x3):\n{D[:3, :3]}")
             logger.info(
                 f"High-dim stats: min={D.min():.4f}, max={D.max():.4f}, mean={D.mean():.4f}"
             )
 
-        # low-dim pairwise distances
-        low_dim_distances = self.dist_calculator.pairwise_distances(
-            low_dim_embedding, low_dim_embedding
-        )
-        if self.verbose and self._first_stress_call:
+            # log lowdim distances
             d = low_dim_distances.detach().cpu().numpy()
             logger.info(f"Low-dim distances (sample 3x3):\n{d[:3, :3]}")
             logger.info(
                 f"Low-dim stats: min={d.min():.4f}, max={d.max():.4f}, mean={d.mean():.4f}"
             )
 
-        transformed_high_dim, _ = self.high_dim_transform(high_dim_distances)
-        transformed_low_dim, _ = self.low_dim_transform(low_dim_distances)
-
-        if self.verbose and self._first_stress_call:
+            # log transformed distances
             tD = transformed_high_dim.detach().cpu().numpy()
             td = transformed_low_dim.detach().cpu().numpy()
             logger.info(f"Transformed high-dim (sample 3x3):\n{tD[:3, :3]}")
             logger.info(f"Transformed low-dim (sample 3x3):\n{td[:3, :3]}")
 
-        direct_stress = torch.sum(
-            weights * (high_dim_distances - low_dim_distances) ** 2
-        )
-        transformed_stress = torch.sum(
-            weights * (transformed_high_dim - transformed_low_dim) ** 2
-        )
-
-        # combine stresses using the mixing ratio
-        # when mixing_ratio = 1 : use only direct distances
-        # when mixing_ratio = 0 : use only transformed distances
-        combined_stress = (
-            mixing_ratio * direct_stress + (1 - mixing_ratio) * transformed_stress
-        )
-
-        if self.verbose:
             logger.info(
-                f"Stress: direct={direct_stress.item():.4f}, transformed={transformed_stress.item():.4f}, combined={combined_stress.item():.4f}, mixing_ratio={mixing_ratio:.2f}"
+                f"Stress: direct={direct_stress.item():.4f}, "
+                f"transformed={transformed_stress.item():.4f},"
+                f"combined={combined_stress.item():.4f}, mixing_ratio={mixing_ratio:.2f}"
             )
+
             self._first_stress_call = False
 
-        return combined_stress
+        normalized_stress = combined_stress / weights_2d.sum()
+        logger.info(f"Normalized stress: {normalized_stress.item():.4f}")
+
+        return normalized_stress
 
     def _optimize(
         self,
