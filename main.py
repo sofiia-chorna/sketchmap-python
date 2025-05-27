@@ -219,7 +219,7 @@ def select_landmarks(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
 )
 @click.option(
-    "--gopt-steps", type=int, default=0, help="Number of global optimization steps"
+    "--gopt-steps", type=int, default=3, help="Number of global optimization steps"
 )
 @click.option(
     "--imix", type=float, default=0.0, help="Mixing parameter for stress function"
@@ -232,9 +232,6 @@ def select_landmarks(
 @click.option("--b-hd", type=int, help="'b' parameter for high-dim sigmoid")
 @click.option("--a-ld", type=int, help="'a' parameter for low-dim sigmoid")
 @click.option("--b-ld", type=int, help="'b' parameter for low-dim sigmoid")
-@click.option(
-    "--grid-width", type=float, default=1.5, help="Grid width for global optimization"
-)
 @click.option("--center/--no-center", default=True, help="Center the points")
 @click.option("--verbose", "-v", is_flag=True)
 def dimred(
@@ -254,7 +251,6 @@ def dimred(
     b_hd: Optional[int] = None,
     a_ld: Optional[int] = None,
     b_ld: Optional[int] = None,
-    grid_width: Optional[float] = None,
     center: bool = True,
     verbose: bool = True,
     seed: int = 42,
@@ -308,12 +304,6 @@ def dimred(
         logger.info(f"Using initial low embeddings from {init_embedding_filepath}")
         initial_embedding = np.loadtxt(init_embedding_filepath)
         initial_embedding = to_tensor(initial_embedding)
-        """
-        initial_embedding = np.hstack([
-            initial_embedding,
-            np.random.normal(0, 0.1, (len(initial_embedding), 1))
-        ])
-        """
     else:
         initial_embedding = None
 
@@ -331,42 +321,19 @@ def dimred(
         reducer.set_transformation("low", "sigmoid", (sigma, a_ld, b_ld))
 
         logger.info(f"Refinement with sigmoid function")
+
         low_dim_embedding = reducer.fit(
             data_points=data_points,
             point_weights=point_weights,
             initial_embedding=low_dim_embedding,
             num_steps=preopt_steps,
             mixing_ratio=imix,
+            global_opt_num_steps=1000,
         )
 
         low_dim_embedding = low_dim_embedding.cpu().numpy()
         np.savetxt(output_filepath, low_dim_embedding)
         logger.info(f"Saved results to {output_filepath}")
-
-        """
-        current_mix = imix
-
-        for iteration in range(max(1, gopt_steps)):
-            logger.info(f"Refinement iteration {iteration + 1}, mix={current_mix:.2f}")
-
-            low_dim_embedding = reducer.fit(
-                data_points=data_points,
-                point_weights=point_weights,
-                initial_embedding=initial_embedding,
-                num_steps=preopt_steps,
-                mixing_ratio=current_mix,
-            )
-
-            min_mix = 0.1
-            mix_decay = 0.8
-
-            # reduce mixing parameter
-            if iteration < gopt_steps - 1:
-                current_mix *= mix_decay
-                current_mix = max(current_mix, min_mix)
-
-            initial_embedding = low_dim_embedding
-            """
 
     except Exception as error:
         logger.error(f"Dimensionality reduction failed ! {error}")
