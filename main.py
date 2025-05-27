@@ -219,7 +219,7 @@ def select_landmarks(
     "--preopt-steps", type=int, default=100, help="Number of pre-optimization steps"
 )
 @click.option(
-    "--gopt-steps", type=int, default=3, help="Number of global optimization steps"
+    "--gopt-steps", type=int, default=0, help="Number of global optimization steps"
 )
 @click.option(
     "--imix", type=float, default=0.0, help="Mixing parameter for stress function"
@@ -243,7 +243,7 @@ def dimred(
     period: float = 0.0,
     weighted: bool = False,
     preopt_steps: int = 100,
-    gopt_steps: int = 3,
+    gopt_steps: int = 0,
     imix: float = 0.0,
     metric: Literal["euclidean", "dot", "pbc", "sphere"] = "euclidean",
     sigma: Optional[float] = None,
@@ -313,7 +313,7 @@ def dimred(
             data_points=data_points,
             point_weights=point_weights,
             initial_embedding=initial_embedding,
-            num_steps=preopt_steps,
+            local_opt_num_steps=preopt_steps,
             mixing_ratio=imix,
         )
 
@@ -326,9 +326,9 @@ def dimred(
             data_points=data_points,
             point_weights=point_weights,
             initial_embedding=low_dim_embedding,
-            num_steps=preopt_steps,
+            local_opt_num_steps=preopt_steps,
+            global_opt_num_steps=gopt_steps,
             mixing_ratio=imix,
-            global_opt_num_steps=1000,
         )
 
         low_dim_embedding = low_dim_embedding.cpu().numpy()

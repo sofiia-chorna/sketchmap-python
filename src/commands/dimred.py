@@ -40,7 +40,7 @@ class DimRed:
         data_points: torch.Tensor,
         initial_embedding: Optional[torch.Tensor],
         point_weights: Optional[torch.Tensor] = None,
-        num_steps: int = 100,
+        local_opt_num_steps: int = 100,
         global_opt_num_steps: int = 0,
         mixing_ratio: float = 0.0,
         learning_rate: float = 1,
@@ -78,7 +78,8 @@ class DimRed:
             logger.info("=" * 20 + " Optimization configuration " + "=" * 20)
             logger.info(f"{'Points:':<20} {num_points}")
             logger.info(f"{'Dimensions:':<20} {embedding_dim}")
-            logger.info(f"{'Max LBFGS steps:':<20} {num_steps}")
+            logger.info(f"{'Max LBFGS steps:':<20} {local_opt_num_steps}")
+            logger.info(f"{'Max global opt steps:':<20} {global_opt_num_steps}")
             logger.info(f"{'Learning rate:':<20} {learning_rate:.2e}")
             logger.info(f"{'Mixing ratio:':<20} {mixing_ratio:.2f}")
             logger.info("=" * 68)
@@ -91,10 +92,10 @@ class DimRed:
                 mixing_ratio=mixing_ratio,
             )
 
-        optimized_embedding = self._optimize(
+        optimized_embedding = self._local_optimize(
             initial_embedding=initial_embedding,
             loss_fn=loss_fn,
-            num_steps=num_steps,
+            num_steps=local_opt_num_steps,
             learning_rate=learning_rate,
         )
 
@@ -109,6 +110,53 @@ class DimRed:
             logger.info(f"Final loss from global optimization: {final_loss:.6f}")
 
         logger.info("Finished fit process")
+
+        return optimized_embedding
+
+    def _local_optimize(
+        self,
+        initial_embedding: torch.Tensor,
+        loss_fn: Callable[[torch.Tensor], torch.Tensor],
+        num_steps: int = 100,
+        learning_rate: float = 0.001,
+    ) -> torch.Tensor:
+
+        embedding = (
+            initial_embedding.to(device=DEVICE, dtype=torch.float64)
+            .clone()
+            .detach()
+            .requires_grad_(True)
+        )
+
+        optimizer = torch.optim.LBFGS(
+            [embedding],
+            lr=learning_rate,
+            max_iter=num_steps,
+            tolerance_grad=1e-6,
+            tolerance_change=1e-9,
+            history_size=10,
+            line_search_fn="strong_wolfe",
+        )
+
+        def closure():
+            optimizer.zero_grad()
+            loss = loss_fn(embedding)
+            loss.backward()
+
+            if self.verbose:
+                logger.debug(f"Current loss: {loss.item():.6f}")
+
+            return loss
+
+        logger.info("Starting LBFGS optimization")
+
+        optimizer.step(closure)
+
+        optimized_embedding = embedding.detach()
+
+        if self.verbose:
+            final_loss = loss_fn(optimized_embedding)
+            logger.info(f"Final loss: {final_loss.item():.6f}")
 
         return optimized_embedding
 
@@ -289,50 +337,3 @@ class DimRed:
         # logger.info(f"Normalized stress: {normalized_stress.item():.4f}")
 
         return normalized_stress
-
-    def _optimize(
-        self,
-        initial_embedding: torch.Tensor,
-        loss_fn: Callable[[torch.Tensor], torch.Tensor],
-        num_steps: int = 100,
-        learning_rate: float = 0.001,
-    ) -> torch.Tensor:
-
-        embedding = (
-            initial_embedding.to(device=DEVICE, dtype=torch.float64)
-            .clone()
-            .detach()
-            .requires_grad_(True)
-        )
-
-        optimizer = torch.optim.LBFGS(
-            [embedding],
-            lr=learning_rate,
-            max_iter=num_steps,
-            tolerance_grad=1e-6,
-            tolerance_change=1e-9,
-            history_size=10,
-            line_search_fn="strong_wolfe",
-        )
-
-        def closure():
-            optimizer.zero_grad()
-            loss = loss_fn(embedding)
-            loss.backward()
-
-            if self.verbose:
-                logger.debug(f"Current loss: {loss.item():.6f}")
-
-            return loss
-
-        logger.info("Starting LBFGS optimization")
-
-        optimizer.step(closure)
-
-        optimized_embedding = embedding.detach()
-
-        if self.verbose:
-            final_loss = loss_fn(optimized_embedding)
-            logger.info(f"Final loss: {final_loss.item():.6f}")
-
-        return optimized_embedding
