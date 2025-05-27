@@ -42,7 +42,7 @@ class DimRed:
         point_weights: Optional[torch.Tensor] = None,
         num_steps: int = 100,
         mixing_ratio: float = 0.0,
-        learning_rate: float = 0.001,
+        learning_rate: float = 0.1,
     ) -> torch.Tensor:
         """
         Fit the model to the given data points and return the low-dimensional embedding
