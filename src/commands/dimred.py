@@ -40,9 +40,10 @@ class DimRed:
         data_points: torch.Tensor,
         initial_embedding: Optional[torch.Tensor],
         point_weights: Optional[torch.Tensor] = None,
-        num_steps: int = 100,
+        local_opt_num_steps: int = 100,
+        global_opt_num_steps: int = 0,
         mixing_ratio: float = 0.0,
-        learning_rate: float = 0.1,
+        learning_rate: float = 1,
     ) -> torch.Tensor:
         """
         Fit the model to the given data points and return the low-dimensional embedding
@@ -77,7 +78,8 @@ class DimRed:
             logger.info("=" * 20 + " Optimization configuration " + "=" * 20)
             logger.info(f"{'Points:':<20} {num_points}")
             logger.info(f"{'Dimensions:':<20} {embedding_dim}")
-            logger.info(f"{'Max LBFGS steps:':<20} {num_steps}")
+            logger.info(f"{'Max LBFGS steps:':<20} {local_opt_num_steps}")
+            logger.info(f"{'Max global opt steps:':<20} {global_opt_num_steps}")
             logger.info(f"{'Learning rate:':<20} {learning_rate:.2e}")
             logger.info(f"{'Mixing ratio:':<20} {mixing_ratio:.2f}")
             logger.info("=" * 68)
@@ -90,16 +92,139 @@ class DimRed:
                 mixing_ratio=mixing_ratio,
             )
 
-        optimized_embedding = self._optimize(
+        optimized_embedding = self._local_optimize(
             initial_embedding=initial_embedding,
             loss_fn=loss_fn,
-            num_steps=num_steps,
+            num_steps=local_opt_num_steps,
             learning_rate=learning_rate,
         )
+
+        if global_opt_num_steps > 0:
+            logger.info("Starting global optimization")
+            optimized_embedding = self._global_optimize(
+                initial_embedding=optimized_embedding,
+                loss_fn=loss_fn,
+                num_steps=global_opt_num_steps,
+            )
+            final_loss = loss_fn(optimized_embedding).item()
+            logger.info(f"Final loss from global optimization: {final_loss:.6f}")
 
         logger.info("Finished fit process")
 
         return optimized_embedding
+
+    def _local_optimize(
+        self,
+        initial_embedding: torch.Tensor,
+        loss_fn: Callable[[torch.Tensor], torch.Tensor],
+        num_steps: int = 100,
+        learning_rate: float = 0.001,
+    ) -> torch.Tensor:
+
+        embedding = (
+            initial_embedding.to(device=DEVICE, dtype=torch.float64)
+            .clone()
+            .detach()
+            .requires_grad_(True)
+        )
+
+        optimizer = torch.optim.LBFGS(
+            [embedding],
+            lr=learning_rate,
+            max_iter=num_steps,
+            tolerance_grad=1e-6,
+            tolerance_change=1e-9,
+            history_size=10,
+            line_search_fn="strong_wolfe",
+        )
+
+        def closure():
+            optimizer.zero_grad()
+            loss = loss_fn(embedding)
+            loss.backward()
+
+            if self.verbose:
+                logger.debug(f"Current loss: {loss.item():.6f}")
+
+            return loss
+
+        logger.info("Starting LBFGS optimization")
+
+        optimizer.step(closure)
+
+        optimized_embedding = embedding.detach()
+
+        if self.verbose:
+            final_loss = loss_fn(optimized_embedding)
+            logger.info(f"Final loss: {final_loss.item():.6f}")
+
+        return optimized_embedding
+
+    def _global_optimize(
+        self,
+        initial_embedding: torch.Tensor,
+        loss_fn: Callable[[torch.Tensor], torch.Tensor],
+        num_steps: int = 1000,
+        population_size: int = 20,
+        learning_rate: float = 1e-2,
+    ) -> torch.Tensor:
+        """
+        Run a global optimization on the embedding using a population-based strategy
+        combined with gradient-based refinement with Adam
+        """
+
+        # init population with small random perturbations around initial embedding
+        noise_scale = 0.1
+        population = [
+            (
+                initial_embedding.detach().clone()
+                + noise_scale * torch.randn_like(initial_embedding)
+            ).requires_grad_(True)
+            for _ in range(population_size)
+        ]
+
+        optimizer = torch.optim.Adam(population, lr=learning_rate, betas=(0.95, 0.99))
+
+        best_loss = float("inf")
+        patience = 15
+        no_improve_steps = 0
+
+        best_embedding = initial_embedding.detach().clone()
+
+        for step in tqdm(range(num_steps)):
+            optimizer.zero_grad()
+
+            losses = [loss_fn(individual) for individual in population]
+
+            torch.autograd.backward(losses, [torch.ones_like(l) for l in losses])
+
+            optimizer.step()
+
+            # find best performing member in current population
+            current_losses = [l.item() for l in losses]
+            min_loss = min(current_losses)
+            min_id = current_losses.index(min_loss)
+
+            # update best solution if improvement found
+            if min_loss < best_loss:
+                best_loss = min_loss
+                best_embedding = population[min_id].clone().detach()
+                no_improve_steps = 0
+            else:
+                no_improve_steps += 1
+
+            # early stopping
+            if no_improve_steps >= patience:
+                if self.verbose:
+                    logger.info(f"Early stopping global optimization at step {step}")
+                break
+
+            if self.verbose and step % 10 == 0:
+                logger.info(
+                    f"Global opt step {step}/{num_steps}, best loss: {best_loss:.6f}"
+                )
+
+        return best_embedding.detach().clone()
 
     def set_transformation(
         self,
@@ -209,53 +334,6 @@ class DimRed:
             self._first_stress_call = False
 
         normalized_stress = combined_stress / weights_2d.sum()
-        logger.info(f"Normalized stress: {normalized_stress.item():.4f}")
+        # logger.info(f"Normalized stress: {normalized_stress.item():.4f}")
 
         return normalized_stress
-
-    def _optimize(
-        self,
-        initial_embedding: torch.Tensor,
-        loss_fn: Callable[[torch.Tensor], torch.Tensor],
-        num_steps: int = 100,
-        learning_rate: float = 0.001,
-    ) -> torch.Tensor:
-
-        embedding = (
-            initial_embedding.to(device=DEVICE, dtype=torch.float64)
-            .clone()
-            .detach()
-            .requires_grad_(True)
-        )
-
-        optimizer = torch.optim.LBFGS(
-            [embedding],
-            lr=learning_rate,
-            max_iter=num_steps,
-            tolerance_grad=1e-6,
-            tolerance_change=1e-9,
-            history_size=10,
-            line_search_fn="strong_wolfe",
-        )
-
-        def closure():
-            optimizer.zero_grad()
-            loss = loss_fn(embedding)
-            loss.backward()
-
-            if self.verbose:
-                logger.debug(f"Current loss: {loss.item():.6f}")
-
-            return loss
-
-        logger.info("Starting LBFGS optimization")
-
-        optimizer.step(closure)
-
-        optimized_embedding = embedding.detach()
-
-        if self.verbose:
-            final_loss = loss_fn(optimized_embedding)
-            logger.info(f"Final loss: {final_loss.item():.6f}")
-
-        return optimized_embedding
