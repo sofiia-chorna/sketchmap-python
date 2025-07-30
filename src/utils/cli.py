@@ -48,6 +48,16 @@ def weighted(func):
     )(func)
 
 
+def normalize(func):
+    return click.option(
+        "--normalize/--no-normalize",
+        default=False,
+        is_flag=True,
+        help="True if distances will be normalized to have mean = 1",
+        type=bool,
+    )(func)
+
+
 def compute_weights(func):
     return click.option(
         "--compute-weights",

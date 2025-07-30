@@ -7,12 +7,16 @@ import torch
 
 # from src.commands.dimred import DimRed, auto_select_parameters
 from src.commands.dimred import DimRed
-from src.commands.distance import DistanceCalculator
+from src.commands.distance_calculator import DistanceCalculator
 from src.commands.distance_histogram import DistanceHistogram
 from src.commands.landmarks import (
     get_landmark_stat,
     plot_pca_landmarks,
     run_get_landmarks,
+)
+from src.commands.normalized_distance_calculator import (
+    NormalizedDistanceCalculator,
+    compute_normalization_factor,
 )
 from src.utils.cli import (
     compute_weights,
@@ -22,6 +26,7 @@ from src.utils.cli import (
     max_distance,
     metric,
     n_bin,
+    normalize,
     num,
     numpy,
     output_filepath,
@@ -52,6 +57,7 @@ def main():
 @high_dimension
 @output_filepath
 @weighted
+@normalize
 def analyse(
     hdim_filepath: str,
     metric: str,
@@ -62,6 +68,7 @@ def analyse(
     high_dimension: Optional[int],
     output_filepath: Optional[str],
     weighted: Optional[bool],
+    normalize: Optional[bool],
 ):
     logger.info("Start running 'analyze'")
 
@@ -74,11 +81,24 @@ def analyse(
 
     logger.info(f"Start computing distances")
 
-    distance_calculator = DistanceCalculator(metric, period, sphere_period)
+    if normalize:
+        norm_factor = compute_normalization_factor(points, metric)
+        print(
+            f"Normalization factor: {norm_factor:.4f} (mean distance = {norm_factor:.2f})"
+        )
+        distance_calculator = NormalizedDistanceCalculator(
+            normalization_factor=norm_factor,
+            metric=metric,
+            period=period,
+            sphere_period=sphere_period,
+        )
+
+    else:
+        distance_calculator = DistanceCalculator(metric, period, sphere_period)
 
     distances = distance_calculator.pairwise_distances(points, points)
-    logger.info(f"Calculated {len(distances)} distances")
 
+    logger.info(f"Calculated {len(distances)} distances")
     logger.info(f"Start creating histogram")
 
     analyzer = DistanceHistogram(n_bin, max_distance)

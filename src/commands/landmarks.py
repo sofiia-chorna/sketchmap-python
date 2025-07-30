@@ -5,7 +5,7 @@ import torch
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 
-from src.commands.distance import DistanceCalculator
+from src.commands.distance_calculator import DistanceCalculator
 from src.utils.const import DEVICE
 from src.utils.logger import logger
 

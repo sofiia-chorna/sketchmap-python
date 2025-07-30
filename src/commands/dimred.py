@@ -4,7 +4,7 @@ import torch
 
 from tqdm import tqdm
 
-from src.commands.distance import DistanceCalculator
+from src.commands.distance_calculator import DistanceCalculator
 from src.commands.init_dimred import run_mds
 from src.commands.transform import sigmoid_transform, identity_transform
 from src.utils.const import DEVICE

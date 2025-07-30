@@ -63,4 +63,5 @@ Replace `high_dimension_data.pt` with your filename.
 | `--period`             | Periodicity for pbc metric  |
 | `--sphere-period`             |  Periodicity for spherical distance metric  |
 | `--output-filepath`             | Path to the custom output landmarks  |
-| `--weighted`             | If the points are weighted in the input high-dimentional data |
+| `--weighted` / `--no-weighted`         | If the points are weighted in the input high-dimentional data |
+| `--normalize` / `--no-normalize`         | If the distances should be normalized to have mean at 1.00 |
