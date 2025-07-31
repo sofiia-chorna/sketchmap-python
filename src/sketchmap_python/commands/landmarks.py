@@ -2,12 +2,11 @@ from typing import Literal, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import torch
+from sketchmap_python.commands.distance_calculator import DistanceCalculator
+from sketchmap_python.utils.const import DEVICE
+from sketchmap_python.utils.logger import logger
 from sklearn.decomposition import PCA
 from tqdm import tqdm
-
-from src.commands.distance_calculator import DistanceCalculator
-from src.utils.const import DEVICE
-from src.utils.logger import logger
 
 
 def run_get_landmarks(

@@ -1,7 +1,6 @@
 import numpy as np
 import torch
-
-from src.utils.const import DEVICE
+from sketchmap_python.utils.const import DEVICE
 
 
 def to_tensor(data, dtype=torch.float32):

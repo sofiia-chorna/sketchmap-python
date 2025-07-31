@@ -1,7 +1,6 @@
 import numpy as np
 import torch
-
-from src.commands.distance_calculator import DistanceCalculator
+from sketchmap_python.commands.distance_calculator import DistanceCalculator
 
 
 class NormalizedDistanceCalculator(DistanceCalculator):

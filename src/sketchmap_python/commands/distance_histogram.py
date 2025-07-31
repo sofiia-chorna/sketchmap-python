@@ -1,12 +1,11 @@
+import csv
 from typing import Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from scipy.optimize import curve_fit
-import csv
-
-from src.utils.logger import logger
+from sketchmap_python.utils.logger import logger
 
 
 class DistanceHistogram:

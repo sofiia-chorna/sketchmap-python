@@ -1,8 +1,6 @@
 import torch
-
+from sketchmap_python.utils.tensor import to_tensor
 from sklearn.decomposition import PCA
-
-from src.utils.tensor import to_tensor
 
 
 def run_pca(data_points: torch.Tensor, n_components: int = 2) -> torch.Tensor:

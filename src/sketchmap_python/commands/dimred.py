@@ -4,11 +4,11 @@ import torch
 
 from tqdm import tqdm
 
-from src.commands.distance_calculator import DistanceCalculator
-from src.commands.init_dimred import run_mds
-from src.commands.transform import sigmoid_transform, identity_transform
-from src.utils.const import DEVICE
-from src.utils.logger import logger
+from sketchmap_python.commands.distance_calculator import DistanceCalculator
+from sketchmap_python.commands.init_dimred import run_mds
+from sketchmap_python.commands.transform import sigmoid_transform, identity_transform
+from sketchmap_python.utils.const import DEVICE
+from sketchmap_python.utils.logger import logger
 
 
 class DimRed:

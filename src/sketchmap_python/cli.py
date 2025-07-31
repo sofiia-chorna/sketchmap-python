@@ -6,19 +6,20 @@ import numpy as np
 import torch
 
 # from src.commands.dimred import DimRed, auto_select_parameters
-from src.commands.dimred import DimRed
-from src.commands.distance_calculator import DistanceCalculator
-from src.commands.distance_histogram import DistanceHistogram
-from src.commands.landmarks import (
+from sketchmap_python.commands.dimred import DimRed
+
+from sketchmap_python.commands.distance_calculator import DistanceCalculator
+from sketchmap_python.commands.distance_histogram import DistanceHistogram
+from sketchmap_python.commands.landmarks import (
     get_landmark_stat,
     plot_pca_landmarks,
     run_get_landmarks,
 )
-from src.commands.normalized_distance_calculator import (
+from sketchmap_python.commands.normalized_distance_calculator import (
     NormalizedDistanceCalculator,
     compute_normalization_factor,
 )
-from src.utils.cli import (
+from sketchmap_python.utils.cli import (
     compute_weights,
     hdim_filepath,
     high_dimension,
@@ -37,17 +38,17 @@ from src.utils.cli import (
     sphere_period,
     weighted,
 )
-from src.utils.file import read_file
-from src.utils.logger import RUN_PATH, logger
-from src.utils.tensor import to_tensor
+from sketchmap_python.utils.file import read_file
+from sketchmap_python.utils.logger import RUN_PATH, logger
+from sketchmap_python.utils.tensor import to_tensor
 
 
 @click.group()
-def main():
+def cli():
     pass
 
 
-@main.command()
+@cli.command()
 @hdim_filepath
 @metric
 @period
@@ -126,7 +127,7 @@ def analyse(
     logger.info("End running 'analyze'")
 
 
-@main.command()
+@cli.command()
 @hdim_filepath
 @num
 @select_mode
@@ -223,7 +224,7 @@ def select_landmarks(
     logger.info("Finished landmark selection")
 
 
-@main.command()
+@cli.command()
 @hdim_filepath
 @high_dimension
 @low_dimension
@@ -360,10 +361,6 @@ def dimred(
         raise click.Abort()
 
 
-@main.command()
+@cli.command()
 def project():
     pass
-
-
-if __name__ == "__main__":
-    main()

@@ -3,9 +3,8 @@ from typing import List, Optional
 
 import numpy as np
 import torch
-
-from src.utils.const import DEVICE
-from src.utils.logger import logger
+from sketchmap_python.utils.const import DEVICE
+from sketchmap_python.utils.logger import logger
 
 
 def _adjust_dim(points: List[float], dim: Optional[int]):
@@ -42,6 +41,9 @@ def read_file(
         else:
             points = data
             weights = torch.ones(len(points), device=DEVICE)
+
+        print(type(points))
+        print(type(weights))
 
         points = _validate_nan(points)
         weights = _validate_nan(weights)
